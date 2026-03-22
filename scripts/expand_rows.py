@@ -20,6 +20,21 @@ TABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 INTEGER_RE = re.compile(r"^-?\d+$")
 
 
+def resolve_env_file(env_file: str) -> Path:
+    env_path = Path(env_file)
+    if not env_path.is_absolute():
+        env_path = PROJECT_ROOT / env_path
+    return env_path
+
+
+def maybe_load_dotenv(env_file: str) -> None:
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
+    load_dotenv(resolve_env_file(env_file), override=True)
+
+
 def parse_column_list(raw_value: Optional[str]) -> list[str]:
     if not raw_value:
         return []
@@ -110,7 +125,17 @@ def resolve_numeric_starts(
 
 
 def parse_args() -> argparse.Namespace:
+    env_parser = argparse.ArgumentParser(add_help=False)
+    env_parser.add_argument("--env-file", default=".env")
+    env_args, _ = env_parser.parse_known_args()
+    maybe_load_dotenv(env_args.env_file)
+
     parser = argparse.ArgumentParser(description="Expand a template CSV into generated rows.")
+    parser.add_argument(
+        "--env-file",
+        default=env_args.env_file,
+        help="Path to the env file. Defaults to .env in the project root.",
+    )
     parser.add_argument("--table", default=os.getenv("TARGET_TABLE"))
     parser.add_argument("--input")
     parser.add_argument("--output")
@@ -133,12 +158,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    try:
-        from dotenv import load_dotenv
-    except ModuleNotFoundError:
-        load_dotenv = None
-    if load_dotenv is not None:
-        load_dotenv(PROJECT_ROOT / ".env")
     args = parse_args()
     import pandas as pd
 

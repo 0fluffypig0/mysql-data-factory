@@ -152,7 +152,11 @@ class DatabaseManager:
         Returns:
             pandas DataFrame
         """
-        return pd.read_sql(sql, self.conn)
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            columns = [column[0] for column in cursor.description] if cursor.description else []
+        return pd.DataFrame(list(rows), columns=columns)
     
     def show_tables(self) -> List[str]:
         """显示所有表名"""

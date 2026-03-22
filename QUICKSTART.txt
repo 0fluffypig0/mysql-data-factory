@@ -1,0 +1,44 @@
+MySQL Data Factory V1.00 - Quick Start
+
+1. Online machine: build offline env
+   python scripts\build_offline_env.py
+
+2. Copy repository + env_export\mysql_factory_env.tar.gz to bastion host
+
+3. Bastion host: deploy offline env
+   bin\setup_offline.bat
+
+4. Create config
+   copy .env.example .env
+   notepad .env
+
+5. Test DB connection
+   bin\test_connection.bat
+
+6. Export sample CSV
+   bin\export_sample.bat --table your_table --limit 3
+
+7. Edit:
+   data\your_table\sample.csv
+   Save as:
+   data\your_table\template.csv
+
+8. Expand rows
+   bin\expand_rows.bat --table your_table --rows 100
+
+9. Dry-run first
+   bin\insert_csv.bat --table your_table --dry-run
+
+10. Insert after dry-run passes
+    bin\insert_csv.bat --table your_table --batch-size 500
+
+Useful option:
+   --env-file .env.smoke
+
+JSON columns:
+   Configure in .env as:
+   JSON_COLUMNS=profile,extra_info
+
+Rule:
+   Empty JSON cell -> NULL
+   Non-empty JSON cell -> must be valid JSON

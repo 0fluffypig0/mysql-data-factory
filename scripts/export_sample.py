@@ -19,6 +19,21 @@ if str(PROJECT_ROOT) not in sys.path:
 TABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
+def resolve_env_file(env_file: str) -> Path:
+    env_path = Path(env_file)
+    if not env_path.is_absolute():
+        env_path = PROJECT_ROOT / env_path
+    return env_path
+
+
+def maybe_load_dotenv(env_file: str) -> None:
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
+    load_dotenv(resolve_env_file(env_file), override=True)
+
+
 def parse_column_list(raw_value: str | None) -> list[str]:
     if not raw_value:
         return []
@@ -52,7 +67,17 @@ def normalize_json_for_csv(value: object) -> str:
 
 
 def parse_args() -> argparse.Namespace:
+    env_parser = argparse.ArgumentParser(add_help=False)
+    env_parser.add_argument("--env-file", default=".env")
+    env_args, _ = env_parser.parse_known_args()
+    maybe_load_dotenv(env_args.env_file)
+
     parser = argparse.ArgumentParser(description="Export sample records from one table to CSV.")
+    parser.add_argument(
+        "--env-file",
+        default=env_args.env_file,
+        help="Path to the env file. Defaults to .env in the project root.",
+    )
     parser.add_argument("--table", default=os.getenv("TARGET_TABLE"))
     parser.add_argument(
         "--limit",
@@ -69,16 +94,7 @@ def validate_table_name(table_name: str) -> str:
     return table_name
 
 
-def maybe_load_dotenv() -> None:
-    try:
-        from dotenv import load_dotenv
-    except ModuleNotFoundError:
-        return
-    load_dotenv(PROJECT_ROOT / ".env")
-
-
 def main() -> int:
-    maybe_load_dotenv()
     args = parse_args()
     from src.database import DatabaseManager
 

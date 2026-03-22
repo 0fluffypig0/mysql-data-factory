@@ -14,8 +14,33 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def resolve_env_file(env_file: str) -> Path:
+    env_path = Path(env_file)
+    if not env_path.is_absolute():
+        env_path = PROJECT_ROOT / env_path
+    return env_path
+
+
+def maybe_load_dotenv(env_file: str) -> None:
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
+    load_dotenv(resolve_env_file(env_file), override=True)
+
+
 def parse_args() -> argparse.Namespace:
+    env_parser = argparse.ArgumentParser(add_help=False)
+    env_parser.add_argument("--env-file", default=".env")
+    env_args, _ = env_parser.parse_known_args()
+    maybe_load_dotenv(env_args.env_file)
+
     parser = argparse.ArgumentParser(description="Test database connectivity from .env.")
+    parser.add_argument(
+        "--env-file",
+        default=env_args.env_file,
+        help="Path to the env file. Defaults to .env in the project root.",
+    )
     parser.add_argument(
         "--table",
         default=os.getenv("TARGET_TABLE"),
@@ -24,21 +49,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def maybe_load_dotenv() -> None:
-    try:
-        from dotenv import load_dotenv
-    except ModuleNotFoundError:
-        return
-    load_dotenv(PROJECT_ROOT / ".env")
-
-
 def table_exists(db, table_name: str) -> bool:
     rows = db.query("SHOW TABLES LIKE %s", (table_name,))
     return bool(rows)
 
 
 def main() -> int:
-    maybe_load_dotenv()
     args = parse_args()
     from src.database import DatabaseManager
 
