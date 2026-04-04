@@ -1,194 +1,203 @@
-# MySQL Data Factory
+# MySQL Data Factory 2.0
 
-面向堡垒机/离线环境的单表 MySQL 数据处理工具。
+A local, offline-capable MySQL test data generation and insertion tool — with GUI, multi-table campaign orchestration, complex PK pattern support, and full cleanup lifecycle.
 
-这个项目聚焦一个已经跑通的 V1.00 主流程：
+Designed for **bastion host environments**: build your test data package on an online machine, then insert it on an air-gapped database host with no internet access.
 
-在线机打包离线环境 -> 堡垒机部署 -> 读取 `.env` 连库 -> 导出样本 CSV -> 人工整理模板 -> 扩增记录 -> `dry-run` 检查 -> 批量插入
+---
 
-## 项目简介
+## Features
 
-这个项目解决的不是“通用数据工厂”问题，而是一个更具体、可落地的问题：
+- **GUI** (PySide6): 6-tab workflow from connection to cleanup, with real-time progress
+- **Multi-language**: 简体中文 / English / 日本語
+- **Multi-table campaigns**: Configure and insert N tables in one run
+- **Complex PK patterns**: integers, zero-padded strings (`"00000001"`), prefix+number (`"KC0007"`)
+- **PK range modes**: `auto_increment_from_max` / `fixed_start` / `explicit_range`
+- **Metadata cache**: Scan once, reuse across sessions
+- **Sample selection**: by first row, PK lookup, or WHERE clause
+- **Batch insertion**: short-lived connections per batch — bastion-safe
+- **Evidence output**: human-readable directory names, `campaign_manifest.json`, `table_manifest.json`
+- **Cleanup lifecycle**: generated SQL, dry-run COUNT, execute with high-safety confirmation dialog
+- **Offline deployment**: conda-pack to bastion host, zero internet required at runtime
+- **CLI wizard and legacy V1.x scripts**: all still functional
 
-- 在线环境可以联网安装依赖，但堡垒机或隔离区不能联网
-- 需要从 MySQL 里取出少量真实样本，人工整理成模板
-- 需要基于模板快速扩增出一批新记录
-- 在正式写库前，需要先做结构、主键、JSON 合法性等检查
+---
 
-V1.00 的核心思路是：
+## Quick Start
 
-- 不做复杂平台
-- 不做多表编排
-- 不做自动业务规则推断
-- 先把“单表 CSV 工作流”做成一个稳定、可交接、可离线部署的闭环
+### GUI
 
-## 典型使用场景
+```bash
+python scripts/ui_app.py
+```
 
-最典型的使用方式如下：
+On bastion host:
 
-1. 在线机执行 `scripts\build_offline_env.py`，生成离线 Python 环境包
-2. 将仓库代码和 `env_export\mysql_factory_env.tar.gz` 一起带到堡垒机
-3. 堡垒机执行 `bin\setup_offline.bat` 完成离线环境部署
-4. 复制 `.env.example` 为 `.env`，填写数据库信息
-5. 执行 `bin\test_connection.bat` 验证数据库连通性
-6. 执行 `bin\export_sample.bat` 导出 `sample.csv`
-7. 人工把 `sample.csv` 改成 `template.csv`
-8. 执行 `bin\expand_rows.bat` 生成 `generated.csv`
-9. 执行 `bin\insert_csv.bat --dry-run` 做正式插入前检查
-10. 确认无误后执行 `bin\insert_csv.bat` 正式批量插入
+```batch
+bin\run_gui.bat
+```
 
-## 核心特性
+Workflow: **Connection** → **Scan** → **Tasks** → **Preview** → **Execute** → **History**
 
-- 离线部署：可以在在线机打包 Python 运行环境，再带到无网/堡垒机使用
-- 单表 CSV 工作流：围绕 `sample.csv` / `template.csv` / `generated.csv` 展开
-- JSON 列支持：MySQL `JSON` 列以“CSV 中 JSON 字符串”的方式参与主流程
-- `dry-run`：正式插入前先检查主键、列对齐、JSON 合法性等
-- Windows 友好：主入口为 `Python 脚本 + bat`
-- 本地 Docker MySQL 已验证：V1.00 闭环已在本地 Docker MySQL 上真实跑通
+### CLI Wizard
 
-## 适用范围与限制
+```bash
+python scripts/wizard.py --env-file .env
+```
 
-当前 V1.00 适合：
+### Smoke Test
 
-- 单表批量数据准备
-- 堡垒机/隔离区离线运行
-- 先导样本、再人工修模板、再扩增、再插入的场景
-- 需要保留真实字段结构而不是纯随机造数的场景
+```bash
+# Preview only
+python scripts/smoke_test.py --env-file .env
 
-当前 V1.00 不适合：
+# Preview + insert 10 rows
+python scripts/smoke_test.py --env-file .env --insert --rows 10
+```
 
-- 多表联动导入
-- 外键编排
-- `upsert` / `update` / `delete`
-- 自动造复杂假数据
-- 复杂业务规则生成
-- 以 `.json` / `.jsonl` 作为主输入流程
+---
 
-重要限制说明：
+## Configuration
 
-- 当前只支持单表
-- 当前只支持 CSV 主流程
-- JSON 列支持方式是“CSV 中 JSON 字符串”，不是 JSON 文件主流程
-- Notebook 仅保留为参考/调试入口，不是正式主入口
+Copy `.env.example` to `.env` and fill in your credentials:
 
-## 仓库结构
+```ini
+DB_HOST=your.db.host
+DB_PORT=3306
+DB_USER=your_user
+DB_PASSWORD=your_password
+DB_NAME=your_database
+```
 
-```text
+---
+
+## Directory Structure
+
+```
 mysql-data-factory/
-├─ bin/                     Windows 入口脚本
-├─ scripts/                 主流程 Python 脚本
-├─ src/                     复用模块
-├─ env_export/              在线机构建出的离线环境包
-├─ README.md                GitHub 首页总览
-├─ DEPLOYMENT.md            堡垒机部署操作说明
-├─ USER_GUIDE_V1.00.md      超详细 V1.00 使用说明书
-├─ QUICKSTART.txt           最短操作顺序
-├─ .env.example             配置模板
-└─ requirements.txt         离线环境依赖列表
+├── bin/                      # Windows batch entry points
+│   ├── setup_offline.bat     # Deploy offline Python environment
+│   ├── run_gui.bat           # Launch GUI
+│   ├── run_wizard.bat        # Launch CLI wizard
+│   ├── run_cleanup.bat       # Run cleanup
+│   └── test_connection.bat   # Test DB connectivity
+│
+├── scripts/                  # Python entry points
+│   ├── ui_app.py             # GUI application
+│   ├── wizard.py             # CLI wizard
+│   ├── cleanup.py            # Cleanup CLI
+│   ├── smoke_test.py         # Smoke test
+│   ├── pressure_test_100k.py # 100k row pressure test
+│   └── build_offline_env.py  # Build offline package
+│
+├── src/                      # Core library
+│   ├── config/               # .env, connection profiles, app paths
+│   ├── db/                   # Database connection, queries
+│   ├── metadata/             # DB scan, models, caching
+│   ├── sample/               # Sample record selection
+│   ├── strategy/             # PK planning, field strategies
+│   ├── plan/                 # TaskItem, CampaignPlan models
+│   ├── generate/             # Row building, chunk generation
+│   ├── execute/              # Batch insertion, cleanup execution
+│   ├── report/               # History, report management
+│   ├── workflow/             # Campaign orchestration
+│   ├── ui/                   # PySide6 GUI pages
+│   └── utils/                # Timezone, common helpers
+│
+├── metadata_cache/           # Cached DB scan results (runtime, gitignored)
+├── plans/                    # Campaign plan files (runtime, gitignored)
+├── reports/                  # Execution reports (runtime, gitignored)
+├── data/output/              # Generated chunk CSVs (runtime, gitignored)
+├── sql/cleanup/              # Cleanup SQL files (runtime, gitignored)
+├── config/                   # Connection profiles (runtime, gitignored)
+│
+├── environment.yml           # Conda environment spec
+├── requirements.txt          # Pip dependencies
+├── .env.example              # Configuration template
+└── LICENSE                   # MIT
 ```
 
-## 最小使用流程
+---
 
-### 1. 在线机打包离线环境
+## Core Concepts
 
-```powershell
-python scripts\build_offline_env.py
-```
+### Campaign
 
-### 2. 堡垒机部署离线环境
+A batch of table tasks executed together. Gets a unique `campaign_id` used for tracking, output directories, cleanup SQL, and reports.
 
-```batch
-bin\setup_offline.bat
-```
+### TaskItem
 
-### 3. 准备配置文件
+Configuration for one table: row count, batch size, sample method, PK range mode, execution mode, marker column.
 
-```batch
-copy .env.example .env
-notepad .env
-```
+### PK Range Planning
 
-### 4. 测试连接
+| Mode | Description |
+|---|---|
+| `auto_increment_from_max` | Queries `MAX(pk)+1` as the start (safe default) |
+| `fixed_start` | User-specified start value |
+| `explicit_range` | User-specified start and end |
 
-```batch
-bin\test_connection.bat
-```
+Supports integer PKs, zero-padded strings, and prefix+number patterns automatically.
 
-### 5. 导出样本
+### Cleanup
 
-```batch
-bin\export_sample.bat --table your_table --limit 3
-```
+Every campaign generates cleanup SQL targeting the exact PK ranges inserted. Supports dry-run (COUNT) and execute modes, with a high-safety per-table confirmation dialog in the GUI.
 
-### 6. 人工整理模板
+---
 
-把：
+## Offline Deployment
 
-```text
-data\your_table\sample.csv
-```
+1. **Online machine**: Build the package
+   ```bash
+   python scripts/build_offline_env.py
+   # → env_export/mysql_factory_env.tar.gz
+   ```
 
-整理为：
+2. **Transfer**: Copy repo + `env_export/` to bastion host
 
-```text
-data\your_table\template.csv
-```
+3. **Bastion host**: Deploy
+   ```batch
+   bin\setup_offline.bat
+   ```
 
-### 7. 扩增记录
+4. **Run**:
+   ```batch
+   bin\run_gui.bat
+   bin\run_wizard.bat
+   ```
 
-```batch
-bin\expand_rows.bat --table your_table --rows 100
-```
+For full details: [DEPLOYMENT.md](DEPLOYMENT.md)
 
-### 8. dry-run
+---
 
-```batch
-bin\insert_csv.bat --table your_table --dry-run
-```
+## Documentation
 
-### 9. 正式插入
+| Document | Purpose |
+|---|---|
+| [QUICKSTART.md](QUICKSTART.md) | 5-minute on-ramp |
+| [USER_GUIDE_2.0.md](USER_GUIDE_2.0.md) | Complete GUI and CLI reference |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Offline deployment and bastion host setup |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System design and module reference |
+| [RELEASE_NOTES_2.0.md](RELEASE_NOTES_2.0.md) | What's new in 2.0, verified capabilities |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Pre-release validation checklist |
 
-```batch
-bin\insert_csv.bat --table your_table --batch-size 500
-```
+---
 
-## `--env-file` 支持
+## Dependencies
 
-V1.00 发布前已补齐 `--env-file` 支持，以下脚本都可以显式指定配置文件：
+| Package | Version |
+|---|---|
+| Python | 3.11+ |
+| PyMySQL | 1.1.2 |
+| pandas | 2.3.3 |
+| PySide6 | ≥6.6 |
+| loguru | 0.7.3 |
+| python-dotenv | 1.2.2 |
 
-- `test_connection.py`
-- `export_sample.py`
-- `expand_rows.py`
-- `insert_csv.py`
+See `requirements.txt` or `environment.yml` for the full list.
 
-例如：
+---
 
-```batch
-bin\test_connection.bat --env-file .env.smoke --table smoke_users
-```
+## License
 
-默认仍然读取项目根目录下的 `.env`。
-
-## 文档导航
-
-- 堡垒机部署操作说明：[`DEPLOYMENT.md`](./DEPLOYMENT.md)
-- 超详细 V1.00 用户说明书：[`USER_GUIDE_V1.00.md`](./USER_GUIDE_V1.00.md)
-- 最短上手步骤：[`QUICKSTART.txt`](./QUICKSTART.txt)
-
-## 常见问题入口
-
-如果你第一次接触这个项目，建议按下面顺序看文档：
-
-1. 先看本文，理解项目目标和边界
-2. 真正要部署到堡垒机时，看 `DEPLOYMENT.md`
-3. 真正要操作 sample/template/generated 流程时，看 `USER_GUIDE_V1.00.md`
-4. 临时现场操作时，看 `QUICKSTART.txt`
-
-常见问题通常集中在：
-
-- 离线环境包没有生成成功
-- 堡垒机缺少 `tar` 或权限不足
-- `.env` 配置错误导致连接失败
-- `PRIMARY_KEY_COLUMNS` / `UNIQUE_KEY_COLUMNS` / `JSON_COLUMNS` 配置不正确
-- `generated.csv` 中主键或 JSON 数据不合法
-- 没有先做 `dry-run` 就直接插入
+MIT — see [LICENSE](LICENSE)

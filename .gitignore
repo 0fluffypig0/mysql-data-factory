@@ -212,3 +212,70 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ==============================================
+# MySQL Data Factory 2.0 - Project-specific
+# ==============================================
+
+# Data output directories (generated at runtime — keep dir skeleton via .gitkeep)
+data/output/**
+data/export/**
+data/preview/**
+!data/output/.gitkeep
+!data/export/.gitkeep
+!data/preview/.gitkeep
+data/customers_plain/
+data/smoke_users/
+metadata_cache/**
+!metadata_cache/.gitkeep
+plans/**
+!plans/.gitkeep
+reports/**
+!reports/.gitkeep
+sql/cleanup/**
+!sql/cleanup/.gitkeep
+
+# Offline environment
+env_export/
+.offline_envs/
+
+# Local env files
+.env
+.env.smoke
+.env.backup.smoke
+.env.local
+.env.remote_test
+.env.remote_*
+
+# Task templates (user-specific, may contain DB-specific info)
+task_templates/
+
+# Connection profiles may contain credentials
+config/connection_profiles.json
+config/table_profiles.json
+config/gui_language.json
+
+# Claude Code AI session data (never commit)
+.claude/
+
+# Temporary audit/extracted Python environment (never commit)
+_audit_tmp/
+
+# Local work-session notes (not release docs)
+TODAY_*.md
+SPRINT_REPORT_*.md
+
+# dist binaries (large offline packages)
+dist/
+
+# Delivery bundle (generated, not tracked)
+delivery/
+
+# Keep directory structure in ignored dirs
+!plans/.gitkeep
+!reports/.gitkeep
+!metadata_cache/.gitkeep
+!sql/cleanup/.gitkeep
+!data/output/.gitkeep
+!data/export/.gitkeep
+!data/preview/.gitkeep

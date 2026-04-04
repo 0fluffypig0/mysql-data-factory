@@ -1,0 +1,21 @@
+name: mysql_factory_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    - pandas==2.3.3
+    - numpy==2.2.6
+    - pymysql==1.1.2
+    - sqlalchemy
+    - python-dotenv==1.2.2
+    - loguru==0.7.3
+    - openpyxl
+    - pyarrow
+    - tabulate
+    - tqdm
+    - python-dateutil
+    - ipython
+    - PySide6>=6.6

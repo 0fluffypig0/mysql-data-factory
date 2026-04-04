@@ -10,3 +10,4 @@ tabulate
 tqdm
 python-dateutil
 ipython
+PySide6>=6.6
