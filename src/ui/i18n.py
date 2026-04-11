@@ -1,5 +1,5 @@
 """
-Internationalization (i18n) for MySQL Data Factory 3.00 GUI.
+Internationalization (i18n) for MySQL Data Factory 3.0.1 GUI.
 
 Supports: zh_CN (简体中文), en (English), ja (日本語)
 Language preference is persisted to config/gui_language.json.
@@ -25,9 +25,9 @@ _current_lang: str = "zh_CN"
 _TEXTS: dict[str, dict[str, str]] = {
     # ── Window ──
     "window.title": {
-        "zh_CN": "MySQL Data Factory 3.00",
-        "en":    "MySQL Data Factory 3.00",
-        "ja":    "MySQL Data Factory 3.00",
+        "zh_CN": "MySQL Data Factory 3.0.1",
+        "en":    "MySQL Data Factory 3.0.1",
+        "ja":    "MySQL Data Factory 3.0.1",
     },
 
     # ── Tab names ──
@@ -282,6 +282,10 @@ def _save_lang(lang: str) -> None:
 
 # Load on import
 load_saved_lang()
+
+
+
+
 
 
 

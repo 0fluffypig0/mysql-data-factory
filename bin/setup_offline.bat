@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal
 
 echo ========================================
-echo MySQL Data Factory 3.00 - Offline Setup
+echo MySQL Data Factory 3.0.1 - Offline Setup
 echo ========================================
 echo.
 
@@ -92,3 +92,4 @@ echo   1. copy .env.example .env
 echo   2. edit .env with your database credentials
 echo   3. run bin\test_connection.bat
 echo   4. run bin\run_gui.bat
+

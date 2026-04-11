@@ -199,7 +199,9 @@ class TasksPage(ttk.Frame):
 
         # Left: task listbox
         list_frame = ttk.Frame(paned)
-        self._task_listbox = tk.Listbox(list_frame, width=30)
+        # Keep the selected task highlighted while focus moves into the
+        # configuration widgets on the right side.
+        self._task_listbox = tk.Listbox(list_frame, width=30, exportselection=False)
         self._task_listbox.pack(fill=tk.BOTH, expand=True)
         self._task_listbox.bind("<<ListboxSelect>>", self._on_task_selected)
         paned.add(list_frame, weight=1)
@@ -410,3 +412,4 @@ class TasksPage(ttk.Frame):
         path.unlink(missing_ok=True)
         self._refresh_template_list()
         messagebox.showinfo(t("common.info"), t("tasks.tpl_deleted", name=name))
+

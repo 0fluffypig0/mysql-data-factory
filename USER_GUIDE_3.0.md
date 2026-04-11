@@ -1,8 +1,8 @@
-# MySQL Data Factory 3.00 — User Guide
+# MySQL Data Factory 3.0.1 — User Guide
 
 ## Overview
 
-MySQL Data Factory 3.00 generates append-only test data for real MySQL schemas by cloning a real row, incrementing PK and unique-key values, and inserting the generated rows in controlled batches.
+MySQL Data Factory 3.0.1 generates append-only test data for real MySQL schemas by cloning a real row, incrementing PK and unique-key values, and inserting the generated rows in controlled batches.
 
 The recommended release package is:
 
@@ -128,7 +128,7 @@ When you run a campaign, the tool performs these steps for each table:
 4. stream chunk files into batched inserts
 5. write reports and manifests
 
-The 3.00 implementation is designed to keep memory low by processing chunk files sequentially during insert.
+The 3.0.1 implementation is designed to keep memory low by processing chunk files sequentially during insert.
 
 Execution output includes:
 
@@ -228,3 +228,5 @@ These artifacts are what make later validation and cleanup safe.
 3. For weak bastion hosts, prefer conservative batch sizes first, then scale up.
 4. Keep the project directory and runtime together after deployment.
 5. Always confirm cleanup by dry-run before delete on shared environments.
+
+

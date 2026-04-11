@@ -1,12 +1,12 @@
-# MySQL Data Factory 3.00
+# MySQL Data Factory 3.0.1
 
 MySQL Data Factory is an offline-friendly MySQL test-data append tool for bastion-host environments. It ships as source code plus a prebuilt embeddable Python runtime archive, so the target machine only needs to unpack the project and run `bin\setup_offline.bat`.
 
-The 3.00 line keeps the multi-table workflow and cleanup safety from 2.x, but removes the heavy PySide6/conda-pack path. The GUI is now `tkinter`, the offline runtime is a compact zip, and the batch insertion pipeline streams chunk files instead of holding the full campaign in memory.
+The 3.0.1 line keeps the multi-table workflow and cleanup safety from 2.x, but removes the heavy PySide6/conda-pack path. The GUI is now `tkinter`, the offline runtime is a compact zip, and the batch insertion pipeline streams chunk files instead of holding the full campaign in memory.
 
 ---
 
-## 3.00 Highlights
+## 3.0.1 Highlights
 
 - `tkinter` GUI: no external GUI framework dependency, still keeps the 6-tab workflow
 - Portable offline package: `env_export/mysql_factory_env.zip` is the official deployment artifact
@@ -126,7 +126,7 @@ mysql-data-factory/
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Offline deployment and bastion-host usage |
 | [USER_GUIDE_3.0.md](USER_GUIDE_3.0.md) | GUI and CLI workflow reference |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Module layout and data flow |
-| [RELEASE_NOTES_3.0.md](RELEASE_NOTES_3.0.md) | What changed in the 3.00 release |
+| [RELEASE_NOTES_3.0.md](RELEASE_NOTES_3.0.md) | What changed in the 3.0.1 release |
 | [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Release validation checklist |
 
 ---
@@ -150,11 +150,17 @@ mysql-data-factory/
 
 ## Versioning
 
-- User-facing release name: `3.00`
-- Semantic version / Git tag: `v3.0.0`
+- User-facing release name: `3.0.1`
+- Semantic version / Git tag: `v3.0.1`
 
 ---
 
 ## License
 
 MIT — see [LICENSE](LICENSE)
+
+
+
+
+
+

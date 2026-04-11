@@ -1,4 +1,4 @@
-# MySQL Data Factory 3.00 — Quick Start
+# MySQL Data Factory 3.0.1 — Quick Start
 
 This is the shortest path from unpacked project to a real database append run.
 
@@ -157,3 +157,4 @@ runtime\mysql_factory_env\vendor\
 ```
 
 You can move the whole unpacked project directory on the same machine without needing a global Python install.
+
