@@ -1,17 +1,13 @@
 """
 Page 5: Execution & Logs — with i18n and JST timestamps.
+V3.0: tkinter version.
 """
 
 from __future__ import annotations
 
-import time
-
-from PySide6.QtCore import Signal, QThread, QObject, Qt, QTimer
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTextEdit, QProgressBar, QGroupBox, QTableWidget,
-    QTableWidgetItem, QHeaderView,
-)
+import threading
+import tkinter as tk
+from tkinter import ttk
 
 from src.config.app_config import AppPaths, ConnectionConfig
 from src.execute.progress import ProgressSnapshot
@@ -22,282 +18,228 @@ from src.utils.timezone import now_jst_str
 from src.workflow.campaign_runner import RunResult, run_campaign
 
 
-class CampaignWorker(QObject):
-    """Worker for background campaign execution."""
-    progress = Signal(int, int, str, str)  # task_idx, total, phase, detail
-    detail_progress = Signal(object)       # ProgressSnapshot
-    log_message = Signal(str)
-    finished = Signal(object)  # RunResult
-    error = Signal(str)
-
-    def __init__(self, plan: CampaignPlan, conn_config: ConnectionConfig,
-                 paths: AppPaths, scan_result=None, db=None):
-        super().__init__()
-        self.plan = plan
-        self.conn_config = conn_config
-        self.paths = paths
-        self.scan_result = scan_result
-        self.db = db
-
-    def run(self):
-        try:
-            result = run_campaign(
-                plan=self.plan,
-                conn_config=self.conn_config,
-                paths=self.paths,
-                scan_result=self.scan_result,
-                progress_callback=self._on_progress,
-                db=self.db,
-                detail_callback=self._on_detail,
-            )
-            self.finished.emit(result)
-        except Exception as exc:
-            self.error.emit(str(exc))
-
-    def _on_progress(self, task_idx, total, phase, detail):
-        self.progress.emit(task_idx, total, phase, detail)
-        self.log_message.emit(f"[{task_idx}/{total}] {phase}: {detail}")
-
-    def _on_detail(self, snap: ProgressSnapshot):
-        self.detail_progress.emit(snap)
-
-
-class ExecutePage(QWidget):
-    execution_complete = Signal()
-
-    def __init__(self, parent=None):
+class ExecutePage(ttk.Frame):
+    def __init__(self, parent, main_window):
         super().__init__(parent)
+        self.main_window = main_window
+        self.on_execution_complete = None  # callback()
+        self._pending_snap: ProgressSnapshot | None = None
         self._init_ui()
+        self._start_throttle_timer()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-
         # Status
-        self.lbl_status = QLabel()
-        self.lbl_status.setStyleSheet("font-weight: bold; font-size: 14px;")
-        layout.addWidget(self.lbl_status)
+        self._lbl_status = ttk.Label(self, text=t("exec.no_exec"), font=("", 12, "bold"))
+        self._lbl_status.pack(fill=tk.X, padx=10, pady=5)
 
-        # Progress
-        self.progress_bar = QProgressBar()
-        layout.addWidget(self.progress_bar)
-        self.lbl_progress = QLabel("")
-        layout.addWidget(self.lbl_progress)
+        # Overall progress
+        self._progress_var = tk.DoubleVar()
+        self._progress_bar = ttk.Progressbar(self, variable=self._progress_var, maximum=100)
+        self._progress_bar.pack(fill=tk.X, padx=10, pady=2)
+        self._lbl_progress = ttk.Label(self, text="")
+        self._lbl_progress.pack(fill=tk.X, padx=10)
 
-        # Detail panel (fine-grained progress)
-        self.detail_group = QGroupBox()
-        detail_layout = QVBoxLayout()
-        detail_layout.setSpacing(2)
+        # Detail panel
+        detail_frame = ttk.LabelFrame(self, text=t("exec.detail_title"))
+        detail_frame.pack(fill=tk.X, padx=10, pady=5)
+        self._detail_frame = detail_frame
 
-        row1 = QHBoxLayout()
-        self.lbl_phase = QLabel("")
-        self.lbl_phase.setStyleSheet("font-weight: bold;")
-        self.lbl_table_detail = QLabel("")
-        row1.addWidget(self.lbl_phase)
-        row1.addWidget(self.lbl_table_detail)
-        row1.addStretch()
-        detail_layout.addLayout(row1)
+        row1 = ttk.Frame(detail_frame)
+        row1.pack(fill=tk.X, padx=5, pady=1)
+        self._lbl_phase = ttk.Label(row1, text="", font=("", 10, "bold"))
+        self._lbl_phase.pack(side=tk.LEFT)
+        self._lbl_table_detail = ttk.Label(row1, text="")
+        self._lbl_table_detail.pack(side=tk.LEFT, padx=10)
 
-        row2 = QHBoxLayout()
-        self.lbl_rows = QLabel("")
-        self.lbl_chunk = QLabel("")
-        self.lbl_batch = QLabel("")
-        for lbl in (self.lbl_rows, self.lbl_chunk, self.lbl_batch):
-            lbl.setStyleSheet("color: #444; font-size: 12px;")
-            row2.addWidget(lbl)
-        row2.addStretch()
-        detail_layout.addLayout(row2)
+        row2 = ttk.Frame(detail_frame)
+        row2.pack(fill=tk.X, padx=5, pady=1)
+        self._lbl_rows = ttk.Label(row2, text="")
+        self._lbl_rows.pack(side=tk.LEFT, padx=5)
+        self._lbl_chunk = ttk.Label(row2, text="")
+        self._lbl_chunk.pack(side=tk.LEFT, padx=5)
+        self._lbl_batch = ttk.Label(row2, text="")
+        self._lbl_batch.pack(side=tk.LEFT, padx=5)
 
-        row3 = QHBoxLayout()
-        self.lbl_speed = QLabel("")
-        self.lbl_eta = QLabel("")
-        for lbl in (self.lbl_speed, self.lbl_eta):
-            lbl.setStyleSheet("color: #0066cc; font-size: 12px;")
-            row3.addWidget(lbl)
-        row3.addStretch()
-        detail_layout.addLayout(row3)
+        row3 = ttk.Frame(detail_frame)
+        row3.pack(fill=tk.X, padx=5, pady=1)
+        self._lbl_speed = ttk.Label(row3, text="", foreground="#0066cc")
+        self._lbl_speed.pack(side=tk.LEFT, padx=5)
+        self._lbl_eta = ttk.Label(row3, text="", foreground="#0066cc")
+        self._lbl_eta.pack(side=tk.LEFT, padx=5)
 
-        self.detail_bar = QProgressBar()
-        self.detail_bar.setMaximumHeight(12)
-        self.detail_bar.setTextVisible(False)
-        detail_layout.addWidget(self.detail_bar)
-
-        self.detail_group.setLayout(detail_layout)
-        layout.addWidget(self.detail_group)
-
-        # Throttle: buffer latest snapshot, flush to UI every 300ms
-        self._pending_snap: object = None
-        self._throttle_timer = QTimer(self)
-        self._throttle_timer.setInterval(300)
-        self._throttle_timer.timeout.connect(self._flush_detail)
+        self._detail_progress_var = tk.DoubleVar()
+        self._detail_bar = ttk.Progressbar(detail_frame, variable=self._detail_progress_var, maximum=100)
+        self._detail_bar.pack(fill=tk.X, padx=5, pady=2)
 
         # Results table
-        self.result_group = QGroupBox()
-        result_layout = QVBoxLayout()
-        self.result_table = QTableWidget()
-        self.result_table.setColumnCount(6)
-        self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        result_layout.addWidget(self.result_table)
-        self.result_group.setLayout(result_layout)
-        layout.addWidget(self.result_group)
+        result_frame = ttk.LabelFrame(self, text=t("exec.results"))
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self._result_frame = result_frame
+
+        columns = ("table", "status", "attempted", "inserted", "failed", "pkrange")
+        self._result_tree = ttk.Treeview(result_frame, columns=columns, show="headings", height=8)
+        headers = [t("exec.col_table"), t("exec.col_status"), t("exec.col_attempted"),
+                   t("exec.col_inserted"), t("exec.col_failed"), t("exec.col_pkrange")]
+        for col, hdr in zip(columns, headers):
+            self._result_tree.heading(col, text=hdr)
+            self._result_tree.column(col, width=100)
+        self._result_tree.column("table", width=180)
+        self._result_tree.column("pkrange", width=200)
+        self._result_tree.pack(fill=tk.BOTH, expand=True)
 
         # Log output
-        self.log_group = QGroupBox()
-        log_layout = QVBoxLayout()
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(200)
-        log_layout.addWidget(self.log_text)
-        self.log_group.setLayout(log_layout)
-        layout.addWidget(self.log_group)
+        log_frame = ttk.LabelFrame(self, text=t("exec.log"))
+        log_frame.pack(fill=tk.BOTH, padx=10, pady=5)
+        self._log_frame = log_frame
 
-        # Bottom controls
-        btn_layout = QHBoxLayout()
-        self.btn_stop = QPushButton()
-        self.btn_stop.setEnabled(False)
-        self.lbl_paths = QLabel("")
-        self.lbl_paths.setWordWrap(True)
-        btn_layout.addWidget(self.btn_stop)
-        btn_layout.addWidget(self.lbl_paths)
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        self._log_text = tk.Text(log_frame, height=8, state=tk.DISABLED, wrap=tk.WORD)
+        log_scroll = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self._log_text.yview)
+        self._log_text.configure(yscrollcommand=log_scroll.set)
+        self._log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.retranslate()
+        # Bottom
+        bottom = ttk.Frame(self)
+        bottom.pack(fill=tk.X, padx=10, pady=5)
+        self._btn_stop = ttk.Button(bottom, text=t("exec.stop"), state=tk.DISABLED)
+        self._btn_stop.pack(side=tk.LEFT, padx=3)
+        self._lbl_paths = ttk.Label(bottom, text="", wraplength=600)
+        self._lbl_paths.pack(side=tk.LEFT, padx=10)
 
     def retranslate(self):
-        self.lbl_status.setText(t("exec.no_exec"))
-        self.detail_group.setTitle(t("exec.detail_title"))
-        self.result_group.setTitle(t("exec.results"))
-        self.log_group.setTitle(t("exec.log"))
-        self.btn_stop.setText(t("exec.stop"))
-        self.result_table.setHorizontalHeaderLabels([
-            t("exec.col_table"), t("exec.col_status"),
-            t("exec.col_attempted"), t("exec.col_inserted"),
-            t("exec.col_failed"), t("exec.col_pkrange"),
-        ])
+        self._lbl_status.config(text=t("exec.no_exec"))
+        self._detail_frame.config(text=t("exec.detail_title"))
+        self._result_frame.config(text=t("exec.results"))
+        self._log_frame.config(text=t("exec.log"))
+        self._btn_stop.config(text=t("exec.stop"))
+        headers = [t("exec.col_table"), t("exec.col_status"), t("exec.col_attempted"),
+                   t("exec.col_inserted"), t("exec.col_failed"), t("exec.col_pkrange")]
+        for col, hdr in zip(("table", "status", "attempted", "inserted", "failed", "pkrange"), headers):
+            self._result_tree.heading(col, text=hdr)
 
-    def start_execution(self, plan: CampaignPlan, conn_config: ConnectionConfig,
-                        scan_result: DatabaseScanResult | None):
-        self.lbl_status.setText(t("exec.running", cid=plan.campaign_id))
-        self.lbl_status.setStyleSheet("font-weight: bold; font-size: 14px; color: #333;")
-        self.progress_bar.setValue(0)
-        self.result_table.setRowCount(0)
-        self.log_text.clear()
-        self.btn_stop.setEnabled(True)
-        self.log_text.append(f"[{now_jst_str()}] Starting campaign {plan.campaign_id}")
+    def _log(self, msg: str):
+        self._log_text.config(state=tk.NORMAL)
+        self._log_text.insert(tk.END, msg + "\n")
+        self._log_text.see(tk.END)
+        self._log_text.config(state=tk.DISABLED)
 
-        paths = AppPaths()
-        mw = self.window()
-        shared_db = getattr(mw, 'session', None)
-        shared_db = shared_db.db if shared_db is not None else None
-        self._worker = CampaignWorker(plan, conn_config, paths, scan_result, db=shared_db)
-        self._thread = QThread()
-        self._worker.moveToThread(self._thread)
-
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.detail_progress.connect(self._on_detail_progress)
-        self._worker.log_message.connect(self.log_text.append)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.error.connect(self._on_error)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.error.connect(self._thread.quit)
-
-        self._pending_snap = None
-        self._throttle_timer.start()
-        self._thread.start()
-
-    def _on_detail_progress(self, snap):
-        """Buffer latest snapshot; actual UI update happens in _flush_detail."""
-        self._pending_snap = snap
-        # Also emit log line immediately if present (key events only)
-        if snap.log_line:
-            self.log_text.append(f"[{now_jst_str()}] {snap.log_line}")
+    def _start_throttle_timer(self):
+        """Flush pending detail snapshot every 300ms."""
+        self._flush_detail()
+        self.after(300, self._start_throttle_timer)
 
     def _flush_detail(self):
-        """Called by QTimer every 300ms — update detail panel from buffered snapshot."""
         snap = self._pending_snap
         if snap is None:
             return
         self._pending_snap = None
 
-        phase_labels = {"sample": "Sample", "generate": "Generate",
-                        "insert": "Insert", "done": "Done"}
-        self.lbl_phase.setText(phase_labels.get(snap.phase, snap.phase).upper())
-        self.lbl_table_detail.setText(snap.table_name)
+        phase_labels = {"sample": "SAMPLE", "generate": "GENERATE",
+                        "insert": "INSERT", "done": "DONE"}
+        self._lbl_phase.config(text=phase_labels.get(snap.phase, snap.phase.upper()))
+        self._lbl_table_detail.config(text=snap.table_name)
 
         if snap.phase == "generate":
-            self.lbl_rows.setText(
-                f"Generated: {snap.generated_rows:,} / {snap.total_rows:,}")
-            self.lbl_chunk.setText(
-                f"Chunk: {snap.chunk_idx} / {snap.total_chunks}")
-            self.lbl_batch.setText("")
-            self.detail_bar.setMaximum(snap.total_chunks or 1)
-            self.detail_bar.setValue(snap.chunk_idx)
+            self._lbl_rows.config(text=f"Generated: {snap.generated_rows:,} / {snap.total_rows:,}")
+            self._lbl_chunk.config(text=f"Chunk: {snap.chunk_idx} / {snap.total_chunks}")
+            self._lbl_batch.config(text="")
+            total = snap.total_chunks or 1
+            self._detail_progress_var.set(snap.chunk_idx / total * 100)
         elif snap.phase == "insert":
-            self.lbl_rows.setText(
-                f"Inserted: {snap.inserted_rows:,} / {snap.total_rows:,}")
-            self.lbl_chunk.setText(
-                f"Chunk: {snap.chunk_idx} / {snap.total_chunks}")
-            self.lbl_batch.setText(
-                f"Batch: {snap.batch_idx} / {snap.total_batches}")
-            self.detail_bar.setMaximum(snap.total_batches or 1)
-            self.detail_bar.setValue(snap.batch_idx)
+            self._lbl_rows.config(text=f"Inserted: {snap.inserted_rows:,} / {snap.total_rows:,}")
+            self._lbl_chunk.config(text=f"Chunk: {snap.chunk_idx} / {snap.total_chunks}")
+            self._lbl_batch.config(text=f"Batch: {snap.batch_idx} / {snap.total_batches}")
+            total = snap.total_batches or 1
+            self._detail_progress_var.set(snap.batch_idx / total * 100)
         else:
-            self.lbl_rows.setText("")
-            self.lbl_chunk.setText("")
-            self.lbl_batch.setText("")
+            self._lbl_rows.config(text="")
+            self._lbl_chunk.config(text="")
+            self._lbl_batch.config(text="")
 
-        self.lbl_speed.setText(f"Speed: {snap.speed_str()}")
-        self.lbl_eta.setText(f"ETA: {snap.eta_str()}")
+        self._lbl_speed.config(text=f"Speed: {snap.speed_str()}")
+        self._lbl_eta.config(text=f"ETA: {snap.eta_str()}")
+
+    def start_execution(self, plan: CampaignPlan, conn_config: ConnectionConfig,
+                        scan_result: DatabaseScanResult | None):
+        self._lbl_status.config(text=t("exec.running", cid=plan.campaign_id))
+        self._progress_var.set(0)
+        for item in self._result_tree.get_children():
+            self._result_tree.delete(item)
+        self._log_text.config(state=tk.NORMAL)
+        self._log_text.delete("1.0", tk.END)
+        self._log_text.config(state=tk.DISABLED)
+        self._btn_stop.config(state=tk.NORMAL)
+        self._log(f"[{now_jst_str()}] Starting campaign {plan.campaign_id}")
+
+        paths = AppPaths()
+        session = self.main_window.session
+        shared_db = session.db if session and session.is_connected else None
+
+        def _worker():
+            try:
+                result = run_campaign(
+                    plan=plan, conn_config=conn_config, paths=paths,
+                    scan_result=scan_result,
+                    progress_callback=self._on_progress_thread,
+                    db=shared_db,
+                    detail_callback=self._on_detail_thread,
+                )
+                self.after(0, lambda: self._on_finished(result))
+            except Exception as exc:
+                self.after(0, lambda e=str(exc): self._on_error(e))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_progress_thread(self, task_idx, total, phase, detail):
+        self.after(0, lambda: self._on_progress(task_idx, total, phase, detail))
+
+    def _on_detail_thread(self, snap: ProgressSnapshot):
+        self._pending_snap = snap
+        if snap.log_line:
+            self.after(0, lambda line=snap.log_line: self._log(f"[{now_jst_str()}] {line}"))
 
     def _on_progress(self, task_idx: int, total: int, phase: str, detail: str):
-        self.progress_bar.setMaximum(total)
-        self.progress_bar.setValue(task_idx)
-        self.lbl_progress.setText(t("exec.progress", idx=task_idx, total=total,
-                                     phase=phase, detail=detail))
+        if total > 0:
+            self._progress_var.set(task_idx / total * 100)
+        self._lbl_progress.config(
+            text=t("exec.progress", idx=task_idx, total=total, phase=phase, detail=detail))
 
     def _on_finished(self, run_result: RunResult):
-        self._throttle_timer.stop()
-        # Flush the last buffered snapshot BEFORE clearing it so detail panel shows final values
+        # Flush last snapshot
         if self._pending_snap is not None:
             self._flush_detail()
         self._pending_snap = None
-        self.btn_stop.setEnabled(False)
+        self._btn_stop.config(state=tk.DISABLED)
+
         all_ok = all(r.status == "completed" for r in run_result.reports)
         status_key = "exec.status_ok" if all_ok else "exec.status_err"
-        self.lbl_status.setText(
-            t("exec.complete", cid=run_result.campaign_id, status=t(status_key))
-        )
-        color = "green" if all_ok else "orange"
-        self.lbl_status.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {color};")
-        self.log_text.append(f"[{now_jst_str()}] Finished: {t(status_key)}")
+        self._lbl_status.config(
+            text=t("exec.complete", cid=run_result.campaign_id, status=t(status_key)),
+            foreground="green" if all_ok else "orange")
+        self._log(f"[{now_jst_str()}] Finished: {t(status_key)}")
 
-        self.result_table.setRowCount(0)
+        for item in self._result_tree.get_children():
+            self._result_tree.delete(item)
         for report in run_result.reports:
-            row_idx = self.result_table.rowCount()
-            self.result_table.insertRow(row_idx)
-            self.result_table.setItem(row_idx, 0, QTableWidgetItem(report.table_name))
-            self.result_table.setItem(row_idx, 1, QTableWidgetItem(report.status))
-            self.result_table.setItem(row_idx, 2, QTableWidgetItem(str(report.total_rows_attempted)))
-            self.result_table.setItem(row_idx, 3, QTableWidgetItem(str(report.total_rows_inserted)))
-            self.result_table.setItem(row_idx, 4, QTableWidgetItem(str(report.failed_batches)))
             pk_range = (f"{report.pk_range_start} ~ {report.pk_range_end}"
                         if report.pk_range_start else "(n/a)")
-            self.result_table.setItem(row_idx, 5, QTableWidgetItem(pk_range))
+            self._result_tree.insert("", tk.END, values=(
+                report.table_name, report.status,
+                str(report.total_rows_attempted), str(report.total_rows_inserted),
+                str(report.failed_batches), pk_range,
+            ))
 
         paths = AppPaths()
-        self.lbl_paths.setText(
-            f"Reports: {paths.reports_dir}\n"
-            f"Cleanup SQL: {paths.cleanup_sql_dir}\n"
-            f"Output data: {paths.output_dir}"
-        )
+        self._lbl_paths.config(
+            text=f"Reports: {paths.reports_dir}\n"
+                 f"Cleanup SQL: {paths.cleanup_sql_dir}\n"
+                 f"Output data: {paths.output_dir}")
 
-        self.execution_complete.emit()
+        if self.on_execution_complete:
+            self.on_execution_complete()
 
     def _on_error(self, error_msg: str):
-        self._throttle_timer.stop()
         self._pending_snap = None
-        self.btn_stop.setEnabled(False)
-        self.lbl_status.setText(f"{t('common.error')}: {error_msg}")
-        self.lbl_status.setStyleSheet("font-weight: bold; font-size: 14px; color: red;")
-        self.log_text.append(f"[{now_jst_str()}] [ERROR] {error_msg}")
+        self._btn_stop.config(state=tk.DISABLED)
+        self._lbl_status.config(text=f"{t('common.error')}: {error_msg}", foreground="red")
+        self._log(f"[{now_jst_str()}] [ERROR] {error_msg}")

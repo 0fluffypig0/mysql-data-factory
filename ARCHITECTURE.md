@@ -1,15 +1,21 @@
-# MySQL Data Factory 2.0 — Architecture
+# MySQL Data Factory 3.00 — Architecture
 
 ## Overview
 
-MySQL Data Factory is a local, offline-capable tool for generating and inserting test data into MySQL databases. It is designed around a **bastion host deployment model**: build and prepare data on an online machine, then execute on a machine with limited connectivity.
+MySQL Data Factory 3.00 is built for one practical goal: append large volumes of test data into real MySQL schemas from restricted environments without dragging along a heavy runtime.
 
-```
+The release is centered on three architectural shifts:
+
+- `tkinter` replaces PySide6 for the desktop workflow
+- an embeddable Python zip replaces the old conda-pack deployment path
+- batch insertion streams chunk files instead of preloading the whole campaign into memory
+
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        User Interfaces                          │
 │                                                                 │
-│   GUI (PySide6)           CLI Wizard          Legacy CLI        │
-│   scripts/ui_app.py      scripts/wizard.py    scripts/*.py      │
+│   tkinter GUI             CLI Wizard          Scripted Tools     │
+│   scripts/ui_app.py       scripts/wizard.py   scripts/*.py      │
 └────────────────┬────────────────┬──────────────────────────────┘
                  │                │
                  ▼                ▼
@@ -17,14 +23,13 @@ MySQL Data Factory is a local, offline-capable tool for generating and inserting
 │                       Workflow Layer                            │
 │                                                                 │
 │         src/workflow/campaign_runner.py                         │
-│         (orchestrates: sample → generate → insert → report)    │
+│     sample -> generate chunks -> insert -> report -> cleanup   │
 └──────┬────────────┬──────────────┬──────────────────┬──────────┘
        │            │              │                  │
        ▼            ▼              ▼                  ▼
 ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌──────────────────────┐
 │  Sample  │ │ Generate │ │  Execute   │ │      Report          │
-│ selector │ │   row    │ │  batch     │ │   history.py         │
-│          │ │ builder  │ │  runner    │ │   cleanup_runner.py  │
+│ selector │ │  chunks  │ │  batches   │ │ history + cleanup    │
 └──────────┘ └──────────┘ └────────────┘ └──────────────────────┘
        │            │              │
        ▼            ▼              ▼
@@ -38,253 +43,103 @@ MySQL Data Factory is a local, offline-capable tool for generating and inserting
 
 ---
 
-## Core Concepts
+## Deployment Model
 
-### Campaign
+The runtime is delivered as:
 
-A **campaign** is the top-level execution unit. Each campaign:
+- source code
+- `env_export/mysql_factory_env.zip`
 
-- Has a unique `campaign_id` (e.g., `20260330_143022_a1b2c3`)
-- Contains one or more **TaskItems** (one per table)
-- Produces a named output directory under `data/output/`
-- Generates a `campaign_manifest.json` and `campaign_summary.csv`
-- Generates cleanup SQL in `sql/cleanup/`
-
-### TaskItem
-
-A **TaskItem** is the configuration for inserting data into one table:
-
-| Field | Description |
-|---|---|
-| `table_name` | Target table |
-| `row_count` | Number of rows to generate |
-| `batch_size` | Rows per INSERT batch |
-| `mode` | `insert` / `dry-run` / `export` |
-| `sample_method` | How to pick the template record |
-| `pk_config` | PK range strategy |
-| `marker_column` | Optional column to tag inserted rows |
-| `field_strategies` | Per-column overrides |
-
-### Metadata Scan
-
-Before any data can be generated, the tool scans the target database to collect:
-
-- Column names, types, nullable flags
-- Primary key columns
-- Unique key columns
-- JSON columns (handled specially)
-- Auto-increment fields
-- Candidate marker columns (remark, source, created_by, etc.)
-- Row counts and current MAX(pk) values
-
-Scan results are **cached** as JSON in `metadata_cache/`. No re-scan is needed between sessions.
-
-### Sample Selection
-
-The tool uses a real database record as a template for new rows. Three methods:
-
-| Method | Description |
-|---|---|
-| `first_row` | Uses the first row from the table (default) |
-| `pk_lookup` | Fetches a specific row by primary key |
-| `where_clause` | Selects using a custom SQL WHERE clause |
-
-### PK Range Planning
-
-The tool must guarantee unique PKs across all inserted rows. Strategies:
-
-| Mode | Description |
-|---|---|
-| `auto_increment_from_max` | Queries `MAX(pk) + 1` as the start (default) |
-| `fixed_start` | Uses a user-specified start value |
-| `explicit_range` | Uses a user-specified start and end |
-
-Pattern support:
-- Pure integers: `1`, `2`, `3`
-- Zero-padded strings: `"00000001"`, `"00000002"`
-- Prefix + number: `"KC0007"`, `"KC0008"`, `"AXC000000998"`
-
-### Data Generation
-
-Rows are generated from the template record by:
-
-1. Incrementing PK and unique key columns by position
-2. Copying all other columns verbatim
-3. Applying per-column field strategy overrides if configured
-4. Writing to chunk CSV files (default: 5,000 rows per chunk)
-
-### Batch Insertion
-
-Chunk CSV files are read and inserted in batches. Key design decisions:
-
-- **Short-lived connections per batch** (default): Safe for bastion environments where connections time out
-- **Shared connection mode** (GUI path): Uses a persistent connection for the entire campaign
-- All batches use `executemany()` for efficiency
-- JSON column values are re-validated before insertion
+On the target machine, `bin\setup_offline.bat` expands that archive into `runtime\mysql_factory_env\` and installs dependencies from the bundled wheels. This keeps the deployment project-relative and easy to move around as one folder.
 
 ---
 
-## Module Reference
+## Core Workflow
 
-### `src/config/`
+### 1. Metadata Scan
 
-| File | Purpose |
-|---|---|
-| `app_config.py` | `ConnectionConfig` (DB credentials), `AppPaths` (standard dirs), `.env` loading |
+`src/metadata/scanner.py` inspects tables, columns, PKs, unique keys, JSON columns, marker candidates, and current row counts. Results are cached under `metadata_cache/`.
 
-### `src/db/`
+### 2. Sample Selection
 
-| File | Purpose |
-|---|---|
-| `connection.py` | `DatabaseManager`: connect/disconnect, query, execute, schema inspection |
+`src/sample/selector.py` pulls one real row from the target table and normalizes it into a template row.
 
-### `src/metadata/`
+### 3. PK Planning
 
-| File | Purpose |
-|---|---|
-| `scanner.py` | `scan_database()`, `scan_table()`, `load_scan_result()`, `save_scan_result()` |
-| `models.py` | `ColumnMetadata`, `TableMetadata`, `DatabaseScanResult` dataclasses |
+`src/strategy/pk_planner.py` computes the insertion range based on:
 
-### `src/sample/`
+- `auto_increment_from_max`
+- `fixed_start`
+- `explicit_range`
 
-| File | Purpose |
-|---|---|
-| `selector.py` | `select_top_rows()`, `select_by_pk()`, `select_by_where()`, `normalize_sample_for_csv()` |
+The planner supports integer, zero-padded string, and prefix-plus-number PK shapes.
 
-### `src/strategy/`
+### 4. Chunk Generation
 
-| File | Purpose |
-|---|---|
-| `pk_planner.py` | `PKRangeConfig`, `analyze_pk_pattern()`, `plan_pk_range()`, `increment_key_value()` |
-| `field_strategy.py` | Per-column override strategies |
+`src/generate/row_builder.py` writes generated rows to CSV chunk files on disk. This keeps generation deterministic and produces evidence artifacts that can be inspected later.
 
-### `src/generate/`
+### 5. Streaming Batch Insert
 
-| File | Purpose |
-|---|---|
-| `row_builder.py` | `generate_preview()`, `generate_to_chunks()`, `resolve_start_values()` |
+`src/execute/batch_runner.py` reads one chunk file at a time and breaks it into insert batches. The important 3.00 behavior is that it no longer builds an in-memory list of every generated row before insert. That change is what keeps million-row campaigns within low double-digit MB memory usage on the Python side.
 
-### `src/execute/`
+### 6. Reporting and Cleanup
 
-| File | Purpose |
-|---|---|
-| `batch_runner.py` | `insert_chunk_files()`, `BatchConfig`, `InsertionReport` |
-| `cleanup_runner.py` | `execute_cleanup()`, `CleanupPlan`, `CleanupTarget` |
-| `progress.py` | `ProgressSnapshot` (real-time progress tracking) |
-| `preflight.py` | Pre-execution validation checks |
+`src/workflow/campaign_runner.py` and `src/report/history.py` write:
 
-### `src/plan/`
-
-| File | Purpose |
-|---|---|
-| `models.py` | `TaskItem`, `CampaignPlan` (JSON-serializable, file-persistent) |
-
-### `src/report/`
-
-| File | Purpose |
-|---|---|
-| `history.py` | `list_reports()`, `list_plans()`, `list_cleanup_sql()`, `load_report()` |
-
-### `src/workflow/`
-
-| File | Purpose |
-|---|---|
-| `campaign_runner.py` | `run_campaign()`: top-level orchestration, manifest writing, report saving |
-
-### `src/ui/`
-
-| File | Purpose |
-|---|---|
-| `main_window.py` | `MainWindow`: tab container, i18n menu, session signals |
-| `session.py` | `SessionManager`: persistent DB connection for GUI |
-| `page_connection.py` | Connection form, profile save/load |
-| `page_scan.py` | Metadata scan trigger, table browser |
-| `page_tasks.py` | Multi-table task configuration, template save/load |
-| `page_preview.py` | Preview generated data before execution |
-| `page_execute.py` | Campaign execution, real-time progress |
-| `page_history.py` | History browser, cleanup dialog |
-| `i18n.py` | Translation strings (zh_CN, en, ja) |
+- `campaign_manifest.json`
+- `campaign_summary.csv`
+- per-table `table_manifest.json`
+- per-table JSON reports
+- generated cleanup SQL under `sql/cleanup/`
 
 ---
 
-## Data Flow
+## GUI Architecture
 
-```
-User selects tables and row counts
-           │
-           ▼
-campaign_runner.run_campaign()
-           │
-    ┌──────┴───────────────────────────────┐
-    │  For each TaskItem:                  │
-    │                                      │
-    │  1. _get_sample()                    │
-    │     → select_top_rows() / pk / where │
-    │     → normalize_sample_for_csv()     │
-    │                                      │
-    │  2. resolve_start_values()           │
-    │     → SELECT MAX(pk) FROM table      │
-    │     → Apply pk_config overrides      │
-    │                                      │
-    │  3. generate_to_chunks()             │
-    │     → For each row: increment PK     │
-    │     → Write chunk_NNNNNN.csv files   │
-    │                                      │
-    │  4. insert_chunk_files()             │
-    │     → Read CSV → executemany()       │
-    │     → Per-batch commit               │
-    │                                      │
-    │  5. _write_table_manifest()          │
-    │     → table_manifest.json            │
-    └──────────────────────────────────────┘
-           │
-           ▼
-    _write_campaign_manifest()
-    _write_campaign_summary_csv()
-    cleanup.save_sql()
-    report.save()
-```
+The GUI lives under `src/ui/` and is now a pure `tkinter` application.
+
+Key conversions in 3.00:
+
+- `MainWindow` wraps `tk.Tk()` instead of `QMainWindow`
+- background work uses `threading.Thread` with `widget.after(...)` callbacks instead of Qt threads/signals
+- `SessionManager` uses plain Python callbacks instead of `QObject`
+- table displays use `ttk.Treeview`
+- modal dialogs use `tk.Toplevel`, `grab_set()`, and `wait_window()`
+
+The six-tab flow remains the same:
+
+1. Connection
+2. Scan
+3. Tasks
+4. Preview
+5. Execute
+6. History
 
 ---
 
-## Output Directory Structure
+## Connection Strategy
 
-Each campaign creates a named directory under `data/output/`:
+The tool prefers explicit control over connection lifetime.
 
-```
-data/output/
-└── 20260402_143022_JST__a1b2c3__ji_test/     ← campaign dir
-    ├── campaign_manifest.json                  ← campaign-level evidence
-    ├── campaign_summary.csv                    ← tabular summary
-    └── 01__t_travel__pk_TRAVEL_ID__rows_5000/ ← table dir
-        ├── table_manifest.json                 ← table-level evidence
-        ├── chunk_000001__rows_5000__range_200001__205000.csv
-        ├── chunk_000002__rows_5000__range_205001__210000.csv
-        └── ...
-```
+- GUI session tasks can reuse a persistent connection through `SessionManager`
+- batch inserts can use short-lived connections per batch, which is safer on unstable bastion links
+- cleanup and scan operations are isolated and explicit
+
+This balance keeps the workflow usable on restrictive environments while still supporting long-running append jobs.
 
 ---
 
-## Connection Model
+## Important Runtime Directories
 
-The tool uses **explicit, short-lived connections** by design:
+These directories are runtime data, not source:
 
-- Each batch of inserts opens, commits, and closes a connection
-- This is safe for bastion hosts where long-lived connections are unstable
-- The GUI uses a **shared persistent connection** (SessionManager) to avoid re-authentication on bastion hosts that require one-time credentials
+- `config/`
+- `data/`
+- `metadata_cache/`
+- `plans/`
+- `reports/`
+- `runtime/`
+- `sql/cleanup/`
+- `task_templates/`
 
----
-
-## Cleanup Architecture
-
-Every campaign generates:
-
-1. `sql/cleanup/cleanup_<campaign_id>.sql` — Ready-to-run SQL
-2. `reports/report_<campaign_id>_<table>.json` — Records PK ranges
-
-The cleanup system:
-
-- Uses `pk_range_start` and `pk_range_end` from reports
-- Optionally adds marker column filter as a safety net
-- Provides dry-run (COUNT only) before actual deletion
-- The GUI shows a high-safety confirmation dialog with all affected tables and estimated row counts
+They are intentionally excluded from normal source-control history, except for the official release archive `env_export/mysql_factory_env.zip`.

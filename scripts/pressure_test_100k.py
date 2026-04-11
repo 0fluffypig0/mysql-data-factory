@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 2.0 - 100k Pressure Test
+MySQL Data Factory 3.00 - 100k Pressure Test
 
 Measures end-to-end throughput for 100,000 row insertion:
 - Generate phase timing
@@ -52,7 +52,7 @@ def main() -> int:
     paths = AppPaths()
     paths.ensure_all()
 
-    print(f"=== MySQL Data Factory 2.0 - Pressure Test ({args.rows:,} rows) ===")
+    print(f"=== MySQL Data Factory 3.00 - Pressure Test ({args.rows:,} rows) ===")
     print(f"    batch_size={args.batch_size}  chunk_size={args.chunk_size}  dry_run={args.dry_run}\n")
 
     # ── 1. Connect (shared, simulating bastion keep-alive) ──
@@ -206,3 +206,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+

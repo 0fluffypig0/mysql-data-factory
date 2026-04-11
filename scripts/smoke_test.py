@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 2.0 - Smoke Test
+MySQL Data Factory 3.00 - Smoke Test
 
 Quick validation that the core pipeline works:
 1. Connect to database
@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Smoke test for MySQL Data Factory 2.0")
+    parser = argparse.ArgumentParser(description="Smoke test for MySQL Data Factory 3.00")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--insert", action="store_true", help="Actually insert test rows")
     parser.add_argument("--table", help="Specific table to test")
@@ -40,7 +40,7 @@ def main() -> int:
     paths = AppPaths()
     paths.ensure_all()
 
-    print("=== MySQL Data Factory 2.0 - Smoke Test ===\n")
+    print("=== MySQL Data Factory 3.00 - Smoke Test ===\n")
 
     # 1. Connection
     print("[1] Testing connection...")
@@ -153,3 +153,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+

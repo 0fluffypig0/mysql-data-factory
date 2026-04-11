@@ -119,15 +119,9 @@ class DatabaseManager:
             self.conn.rollback()
             raise
 
-    def to_dataframe(self, sql: str):
-        if self.conn is None:
-            raise RuntimeError("Database connection is not established.")
-        import pandas as pd
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            column_names = [item[0] for item in cursor.description] if cursor.description else []
-        return pd.DataFrame(list(rows), columns=column_names)
+    def to_dict_list(self, sql: str, params: tuple | None = None) -> list[dict[str, Any]]:
+        """Execute SQL and return results as a list of dicts (replaces to_dataframe)."""
+        return self.query_dicts(sql, params)
 
     # Schema inspection methods
 

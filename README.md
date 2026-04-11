@@ -1,172 +1,120 @@
-# MySQL Data Factory 2.0
+# MySQL Data Factory 3.00
 
-A local, offline-capable MySQL test data generation and insertion tool — with GUI, multi-table campaign orchestration, complex PK pattern support, and full cleanup lifecycle.
+MySQL Data Factory is an offline-friendly MySQL test-data append tool for bastion-host environments. It ships as source code plus a prebuilt embeddable Python runtime archive, so the target machine only needs to unpack the project and run `bin\setup_offline.bat`.
 
-Designed for **bastion host environments**: build your test data package on an online machine, then insert it on an air-gapped database host with no internet access.
+The 3.00 line keeps the multi-table workflow and cleanup safety from 2.x, but removes the heavy PySide6/conda-pack path. The GUI is now `tkinter`, the offline runtime is a compact zip, and the batch insertion pipeline streams chunk files instead of holding the full campaign in memory.
 
 ---
 
-## Features
+## 3.00 Highlights
 
-- **GUI** (PySide6): 6-tab workflow from connection to cleanup, with real-time progress
-- **Multi-language**: 简体中文 / English / 日本語
-- **Multi-table campaigns**: Configure and insert N tables in one run
-- **Complex PK patterns**: integers, zero-padded strings (`"00000001"`), prefix+number (`"KC0007"`)
-- **PK range modes**: `auto_increment_from_max` / `fixed_start` / `explicit_range`
-- **Metadata cache**: Scan once, reuse across sessions
-- **Sample selection**: by first row, PK lookup, or WHERE clause
-- **Batch insertion**: short-lived connections per batch — bastion-safe
-- **Evidence output**: human-readable directory names, `campaign_manifest.json`, `table_manifest.json`
-- **Cleanup lifecycle**: generated SQL, dry-run COUNT, execute with high-safety confirmation dialog
-- **Offline deployment**: conda-pack to bastion host, zero internet required at runtime
-- **CLI wizard and legacy V1.x scripts**: all still functional
+- `tkinter` GUI: no external GUI framework dependency, still keeps the 6-tab workflow
+- Portable offline package: `env_export/mysql_factory_env.zip` is the official deployment artifact
+- Low-memory batch insertion: chunk files are processed one by one during insert
+- Multi-language UI: 简体中文 / English / 日本語
+- Bastion-safe execution: short-lived insert connections, local runtime, no internet needed on target host
+- Safer cleanup: campaign reports + generated cleanup SQL + dry-run/execute flow
+
+---
+
+## Verified on 2026-04-11
+
+- Live integration test: 4 tables, 80,000 rows total, 0 failed batches
+- Live pressure test: `t_email_send_log` appended 1,000,000 rows successfully
+- Million-row throughput: about 18m55s total, about 893 rows/s on the tested environment
+- Memory: Python-side peak memory stayed at about 68.6 MB during the 1,000,000-row traced run
+- Offline runtime: `bin\setup_offline.bat`, `bin\test_connection.bat`, `tkinter` probe, and `bin\run_gui.bat` launch probe all passed
+- Cleanup: both the 80,000-row and 1,000,000-row live test data sets were deleted back by exact PK range
+
+---
+
+## Recommended Delivery Model
+
+Ship these two parts together:
+
+1. Project source tree
+2. `env_export/mysql_factory_env.zip`
+
+That gives the bastion host a predictable install flow:
+
+```batch
+bin\setup_offline.bat
+copy .env.example .env
+bin\test_connection.bat
+bin\run_gui.bat
+```
+
+`bin\setup_offline.bat` extracts the runtime into `runtime\mysql_factory_env\` inside the project directory, installs dependencies from the bundled `vendor/`, and verifies both `pymysql` and `tkinter`.
 
 ---
 
 ## Quick Start
 
-### GUI
+### Local Development
 
 ```bash
 python scripts/ui_app.py
-```
-
-On bastion host:
-
-```batch
-bin\run_gui.bat
-```
-
-Workflow: **Connection** → **Scan** → **Tasks** → **Preview** → **Execute** → **History**
-
-### CLI Wizard
-
-```bash
 python scripts/wizard.py --env-file .env
 ```
 
-### Smoke Test
+### Bastion Host / Offline Machine
+
+```batch
+bin\setup_offline.bat
+copy .env.example .env
+bin\test_connection.bat
+bin\run_gui.bat
+```
+
+If you prefer CLI:
+
+```batch
+bin\run_wizard.bat
+```
+
+---
+
+## Common Commands
 
 ```bash
-# Preview only
-python scripts/smoke_test.py --env-file .env
+# Connection test
+python scripts/test_connection.py --env-file .env
 
-# Preview + insert 10 rows
-python scripts/smoke_test.py --env-file .env --insert --rows 10
+# Preview-only smoke test
+python scripts/smoke_test.py --env-file .env --table your_table --rows 5
+
+# Real insert smoke test
+python scripts/smoke_test.py --env-file .env --table your_table --rows 10 --insert
+
+# Pressure test
+python scripts/pressure_test_100k.py --env-file .env --table your_table --rows 100000
+
+# Full V3 integration validation
+python scripts/test_v3_full.py --env-file .env
 ```
 
 ---
 
-## Configuration
+## Repository Layout
 
-Copy `.env.example` to `.env` and fill in your credentials:
-
-```ini
-DB_HOST=your.db.host
-DB_PORT=3306
-DB_USER=your_user
-DB_PASSWORD=your_password
-DB_NAME=your_database
-```
-
----
-
-## Directory Structure
-
-```
+```text
 mysql-data-factory/
-├── bin/                      # Windows batch entry points
-│   ├── setup_offline.bat     # Deploy offline Python environment
-│   ├── run_gui.bat           # Launch GUI
-│   ├── run_wizard.bat        # Launch CLI wizard
-│   ├── run_cleanup.bat       # Run cleanup
-│   └── test_connection.bat   # Test DB connectivity
-│
-├── scripts/                  # Python entry points
-│   ├── ui_app.py             # GUI application
-│   ├── wizard.py             # CLI wizard
-│   ├── cleanup.py            # Cleanup CLI
-│   ├── smoke_test.py         # Smoke test
-│   ├── pressure_test_100k.py # 100k row pressure test
-│   └── build_offline_env.py  # Build offline package
-│
-├── src/                      # Core library
-│   ├── config/               # .env, connection profiles, app paths
-│   ├── db/                   # Database connection, queries
-│   ├── metadata/             # DB scan, models, caching
-│   ├── sample/               # Sample record selection
-│   ├── strategy/             # PK planning, field strategies
-│   ├── plan/                 # TaskItem, CampaignPlan models
-│   ├── generate/             # Row building, chunk generation
-│   ├── execute/              # Batch insertion, cleanup execution
-│   ├── report/               # History, report management
-│   ├── workflow/             # Campaign orchestration
-│   ├── ui/                   # PySide6 GUI pages
-│   └── utils/                # Timezone, common helpers
-│
-├── metadata_cache/           # Cached DB scan results (runtime, gitignored)
-├── plans/                    # Campaign plan files (runtime, gitignored)
-├── reports/                  # Execution reports (runtime, gitignored)
-├── data/output/              # Generated chunk CSVs (runtime, gitignored)
-├── sql/cleanup/              # Cleanup SQL files (runtime, gitignored)
-├── config/                   # Connection profiles (runtime, gitignored)
-│
-├── environment.yml           # Conda environment spec
-├── requirements.txt          # Pip dependencies
-├── .env.example              # Configuration template
-└── LICENSE                   # MIT
+├── bin/                         # Windows entry points
+├── config/                      # Local profiles and GUI preferences (runtime)
+├── data/                        # Generated CSV chunks and previews (runtime)
+├── env_export/
+│   └── mysql_factory_env.zip    # Official offline runtime bundle
+├── metadata_cache/              # Cached DB scans (runtime)
+├── plans/                       # Saved campaign plans (runtime)
+├── reports/                     # Execution reports (runtime)
+├── runtime/                     # Extracted offline runtime after setup (runtime)
+├── scripts/                     # Python entry points and build/test scripts
+├── sql/cleanup/                 # Generated cleanup SQL (runtime)
+├── src/                         # Core application code
+├── .env.example                 # Connection template
+├── requirements.txt             # Runtime pip dependencies
+└── environment.yml              # Optional dev environment spec
 ```
-
----
-
-## Core Concepts
-
-### Campaign
-
-A batch of table tasks executed together. Gets a unique `campaign_id` used for tracking, output directories, cleanup SQL, and reports.
-
-### TaskItem
-
-Configuration for one table: row count, batch size, sample method, PK range mode, execution mode, marker column.
-
-### PK Range Planning
-
-| Mode | Description |
-|---|---|
-| `auto_increment_from_max` | Queries `MAX(pk)+1` as the start (safe default) |
-| `fixed_start` | User-specified start value |
-| `explicit_range` | User-specified start and end |
-
-Supports integer PKs, zero-padded strings, and prefix+number patterns automatically.
-
-### Cleanup
-
-Every campaign generates cleanup SQL targeting the exact PK ranges inserted. Supports dry-run (COUNT) and execute modes, with a high-safety per-table confirmation dialog in the GUI.
-
----
-
-## Offline Deployment
-
-1. **Online machine**: Build the package
-   ```bash
-   python scripts/build_offline_env.py
-   # → env_export/mysql_factory_env.tar.gz
-   ```
-
-2. **Transfer**: Copy repo + `env_export/` to bastion host
-
-3. **Bastion host**: Deploy
-   ```batch
-   bin\setup_offline.bat
-   ```
-
-4. **Run**:
-   ```batch
-   bin\run_gui.bat
-   bin\run_wizard.bat
-   ```
-
-For full details: [DEPLOYMENT.md](DEPLOYMENT.md)
 
 ---
 
@@ -174,27 +122,36 @@ For full details: [DEPLOYMENT.md](DEPLOYMENT.md)
 
 | Document | Purpose |
 |---|---|
-| [QUICKSTART.md](QUICKSTART.md) | 5-minute on-ramp |
-| [USER_GUIDE_2.0.md](USER_GUIDE_2.0.md) | Complete GUI and CLI reference |
-| [DEPLOYMENT.md](DEPLOYMENT.md) | Offline deployment and bastion host setup |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | System design and module reference |
-| [RELEASE_NOTES_2.0.md](RELEASE_NOTES_2.0.md) | What's new in 2.0, verified capabilities |
-| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Pre-release validation checklist |
+| [QUICKSTART.md](QUICKSTART.md) | Fast 5-minute usage path |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Offline deployment and bastion-host usage |
+| [USER_GUIDE_3.0.md](USER_GUIDE_3.0.md) | GUI and CLI workflow reference |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Module layout and data flow |
+| [RELEASE_NOTES_3.0.md](RELEASE_NOTES_3.0.md) | What changed in the 3.00 release |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Release validation checklist |
 
 ---
 
-## Dependencies
+## Runtime Dependencies
 
 | Package | Version |
 |---|---|
-| Python | 3.11+ |
+| Python | 3.11.x |
 | PyMySQL | 1.1.2 |
-| pandas | 2.3.3 |
-| PySide6 | ≥6.6 |
-| loguru | 0.7.3 |
+| SQLAlchemy | current pinned by `requirements.txt` |
 | python-dotenv | 1.2.2 |
+| loguru | 0.7.3 |
+| tabulate | current pinned by `requirements.txt` |
+| tqdm | current pinned by `requirements.txt` |
+| python-dateutil | current pinned by `requirements.txt` |
 
-See `requirements.txt` or `environment.yml` for the full list.
+`tkinter` is provided by the bundled Python runtime and does not need a separate pip package.
+
+---
+
+## Versioning
+
+- User-facing release name: `3.00`
+- Semantic version / Git tag: `v3.0.0`
 
 ---
 

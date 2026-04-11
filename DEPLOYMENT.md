@@ -1,131 +1,113 @@
-# MySQL Data Factory 2.0 — Deployment Guide
+# MySQL Data Factory 3.00 — Deployment Guide
 
-This guide covers two scenarios:
+This guide describes the release model used by 3.00:
 
-1. **Online machine**: Building the offline package from source
-2. **Bastion host / offline machine**: Deploying and using the tool without internet
+- keep the project source code
+- keep `env_export\mysql_factory_env.zip`
+- on the bastion host, unpack once and run `bin\setup_offline.bat`
+
+No Conda and no internet access are required on the target machine.
 
 ---
 
-## Part 1: Online Machine — Build the Offline Package
+## Recommended Package Layout
 
-### Prerequisites
-
-- Conda (Anaconda or Miniconda) installed
-- Python 3.11+
-- Internet access (for downloading packages)
-
-### Step 1: Create the Conda Environment
-
-```bash
-conda env create -f environment.yml
-conda activate mysql_factory_env
+```text
+mysql-data-factory/
+├── bin/
+├── scripts/
+├── src/
+├── env_export/
+│   └── mysql_factory_env.zip
+└── .env.example
 ```
 
-### Step 2: Build the Offline Package
+This is the artifact you publish or transfer.
+
+---
+
+## Maintainer Workflow
+
+### When You Need to Rebuild the Runtime
+
+Rebuild `env_export\mysql_factory_env.zip` only when one of these changes:
+
+- Python version
+- `requirements.txt`
+- offline packaging logic in `scripts/build_offline_env.py`
+- bundled GUI runtime requirements (`tkinter` / Tcl / Tk layout)
+
+Command:
 
 ```bash
 python scripts/build_offline_env.py
 ```
 
-This runs `conda-pack` to produce:
+Output:
 
-```
+```text
 env_export/
-└── mysql_factory_env.tar.gz   (~500 MB compressed)
+└── mysql_factory_env.zip
 ```
 
-### Step 3: Transfer to the Bastion Host
+### When You Do Not Need to Rebuild the Runtime
 
-Copy the entire repository **plus** the generated archive:
-
-```
-mysql-data-factory/        ← entire repo directory
-env_export/
-└── mysql_factory_env.tar.gz
-```
-
-You may zip the whole project folder for transfer:
-
-```bash
-# Example
-zip -r mysql-data-factory-v2.0.zip mysql-data-factory/ env_export/
-```
+If you only changed application code or docs, you can usually publish source updates without regenerating the archive. For the 3.00 release, the archive is already prepared and intended to travel together with the source tree.
 
 ---
 
-## Part 2: Bastion Host — Deploy the Offline Environment
+## Bastion-Host Installation
 
-### Prerequisites
+### Step 1: Unpack the Project
 
-- Windows (x64) — scripts are `.bat` based
-- No internet required after deployment
-- ~1.5 GB free disk space for the extracted Python environment
+Copy or unzip the project directory to the bastion host.
 
-### Step 1: Deploy the Offline Environment
-
-Run the setup script from the project directory:
+### Step 2: Install the Bundled Runtime
 
 ```batch
-cd mysql-data-factory
 bin\setup_offline.bat
 ```
 
-This will:
+What it does:
 
-1. Extract `env_export\mysql_factory_env.tar.gz` to `C:\tools\mysql_factory_env\`
-2. Run `conda-unpack.exe` to make the environment relocatable
-3. Verify `python.exe` is working
+1. extracts `env_export\mysql_factory_env.zip`
+2. installs pip dependencies from the bundled `vendor/`
+3. verifies `python.exe`
+4. verifies `pymysql`
+5. verifies `tkinter` and Tcl/Tk runtime wiring
 
-Expected output:
+Resulting layout:
 
-```
-[INFO] Extracting environment...
-[INFO] Running conda-unpack...
-[OK] Python 3.11.x
-
-Next steps:
-  1. Copy .env.example to .env and fill in your DB credentials
-  2. Run: bin\test_connection.bat
-  3. Run: bin\run_gui.bat
+```text
+runtime/
+└── mysql_factory_env/
+    ├── python/
+    └── vendor/
 ```
 
-### Step 2: Configure Database Connection
+### Step 3: Configure the Database
 
 ```batch
 copy .env.example .env
-notepad .env
 ```
 
-Fill in:
+Edit `.env` with your target database credentials.
 
-```ini
-DB_HOST=your.db.host
-DB_PORT=3306
-DB_USER=your_username
-DB_PASSWORD=your_password
-DB_NAME=your_database
-```
-
-### Step 3: Test the Connection
+### Step 4: Confirm Connectivity
 
 ```batch
 bin\test_connection.bat
 ```
 
-Expected:
+### Step 5: Run the Tool
 
-```
-[OK] Connected to your_database (N tables found)
-```
-
-### Step 4: Launch the GUI
+GUI:
 
 ```batch
 bin\run_gui.bat
 ```
 
-Or use the CLI wizard:
+CLI wizard:
 
 ```batch
 bin\run_wizard.bat
@@ -133,92 +115,95 @@ bin\run_wizard.bat
 
 ---
 
-## Offline Environment Validation
+## Project-Relative Runtime Model
 
-After deployment, run a quick validation to confirm all components work:
+3.00 installs the runtime under the project directory instead of a global path like `C:\tools\...`.
+
+Benefits:
+
+- easier to copy as one bundle
+- no machine-wide installation requirement
+- safer for restricted bastion hosts
+- simpler cleanup and replacement
+
+The batch files still contain backward-compatible fallback logic for older `C:\tools\mysql_factory_env\python.exe` installs, but the recommended path is the project-local `runtime\mysql_factory_env\python\python.exe`.
+
+---
+
+## Validation Checklist on the Target Machine
+
+Run these after installation:
 
 ```batch
-C:\tools\mysql_factory_env\python.exe --version
-```
-
-```batch
-C:\tools\mysql_factory_env\python.exe -c "import PySide6, pymysql, pandas; print('All OK')"
-```
-
-```batch
+runtime\mysql_factory_env\python\python.exe --version
 bin\test_connection.bat
+bin\run_gui.bat
 ```
 
-```batch
-C:\tools\mysql_factory_env\python.exe scripts\smoke_test.py
+Optional quick pipeline validation:
+
+```bash
+python scripts/smoke_test.py --env-file .env --table your_table --rows 5
+```
+
+Optional real insert validation:
+
+```bash
+python scripts/smoke_test.py --env-file .env --table your_table --rows 10 --insert
 ```
 
 ---
 
 ## Troubleshooting
 
-### `[ERROR] Offline Python environment not found`
+### `Offline environment package not found`
 
-The `.bat` files look for Python at `C:\tools\mysql_factory_env\python.exe`.
-Run `bin\setup_offline.bat` first, or update the `ENV_PYTHON` variable in the batch files if you installed to a different location.
+`bin\setup_offline.bat` expects:
 
-### `conda-unpack not found`
+```text
+env_export\mysql_factory_env.zip
+```
 
-The conda-pack archive may be incomplete. Rebuild it on the online machine:
+If it is missing, rebuild it on the maintainer machine:
 
 ```bash
-pip install conda-pack
 python scripts/build_offline_env.py
 ```
 
-### Connection failures
+### `tkinter import check failed`
 
-- Verify host/port/credentials in `.env`
-- Check VPN or firewall rules for bastion host
-- Test with `telnet your.db.host 3306`
+This usually means the runtime archive is incomplete or the Tcl/Tk files were not bundled correctly. Rebuild the runtime with the current `scripts/build_offline_env.py` and replace the old zip.
 
-### GUI doesn't launch
+### `Offline Python environment not found`
 
-Verify PySide6 is installed:
+Run:
 
 ```batch
-C:\tools\mysql_factory_env\python.exe -c "import PySide6; print(PySide6.__version__)"
+bin\setup_offline.bat
 ```
 
-If missing, rebuild the offline package with PySide6 included (check `environment.yml`).
+This should create:
+
+```text
+runtime\mysql_factory_env\python\python.exe
+```
+
+### Database Connection Fails
+
+Check:
+
+- `.env` contents
+- network reachability from the bastion host
+- firewall / VPN / whitelist rules
+- target MySQL account permissions
 
 ---
 
-## Directory Layout After Deployment
+## Release Recommendation
 
-```
-C:\tools\mysql_factory_env\   ← Python environment (offline)
+For 3.00, treat the following as the official release payload:
 
-mysql-data-factory\           ← Project root
-├── bin\                      ← Batch entry points
-├── scripts\                  ← Python entry points
-├── src\                      ← Core library
-├── data\output\              ← Generated CSV chunks (runtime)
-├── metadata_cache\           ← Cached DB scan results (runtime)
-├── plans\                    ← Campaign plans (runtime)
-├── reports\                  ← Execution reports (runtime)
-├── sql\cleanup\              ← Cleanup SQL files (runtime)
-├── .env                      ← Your local credentials (never commit)
-├── environment.yml           ← Conda environment spec
-└── requirements.txt          ← Pip dependencies
-```
+1. project source tree
+2. `env_export\mysql_factory_env.zip`
 
----
-
-## Re-deployment / Updates
-
-To update the tool without rebuilding the Python environment:
-
-1. Copy only the project files (not `env_export/`)
-2. The Python environment at `C:\tools\mysql_factory_env\` is reused
-
-To update the Python environment:
-
-1. Rebuild the package on the online machine
-2. Delete `C:\tools\mysql_factory_env\` on the bastion host
-3. Run `bin\setup_offline.bat` again
+That keeps deployment simple for downstream users: unpack, configure `.env`, run setup, then launch.

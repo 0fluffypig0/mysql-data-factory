@@ -1,1 +1,1 @@
-"""PySide6 GUI application."""
+"""Tkinter GUI application."""

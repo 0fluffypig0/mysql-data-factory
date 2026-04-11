@@ -1,198 +1,186 @@
 """
 Page 1: Database Connection — with persistent session and i18n.
+V3.0: tkinter version.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
-    QLineEdit, QSpinBox, QPushButton, QComboBox, QLabel, QMessageBox,
-)
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 from src.config.app_config import (
     ConnectionConfig, load_connection_profiles, save_connection_profiles,
     load_dotenv_file,
 )
 from src.ui.i18n import t
-from src.ui.session import SessionManager
 
 
-class ConnectionPage(QWidget):
-    connection_ready = Signal(object)  # emits ConnectionConfig
-
-    def __init__(self, parent=None):
+class ConnectionPage(ttk.Frame):
+    def __init__(self, parent, main_window):
         super().__init__(parent)
+        self.main_window = main_window
+        self.on_connection_ready = None  # callback(config)
+
         self._init_ui()
         self._load_profiles()
 
     @property
-    def _session(self) -> SessionManager:
-        return self.window().session
+    def _session(self):
+        return self.main_window.session
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-
         # ── Profile selector ──
-        self.profile_group = QGroupBox()
-        profile_layout = QHBoxLayout()
-        self.profile_combo = QComboBox()
-        self.profile_combo.setMinimumWidth(200)
-        self.profile_combo.currentTextChanged.connect(self._on_profile_selected)
-        self.lbl_profile = QLabel()
-        profile_layout.addWidget(self.lbl_profile)
-        profile_layout.addWidget(self.profile_combo)
+        profile_frame = ttk.LabelFrame(self, text=t("conn.profile_group"))
+        profile_frame.pack(fill=tk.X, padx=10, pady=5)
+        self._profile_frame = profile_frame
 
-        self.btn_save_profile = QPushButton()
-        self.btn_save_profile.clicked.connect(self._save_profile)
-        self.btn_delete_profile = QPushButton()
-        self.btn_delete_profile.clicked.connect(self._delete_profile)
-        self.btn_load_env = QPushButton()
-        self.btn_load_env.clicked.connect(self._load_from_env)
-        profile_layout.addWidget(self.btn_save_profile)
-        profile_layout.addWidget(self.btn_delete_profile)
-        profile_layout.addWidget(self.btn_load_env)
-        profile_layout.addStretch()
-        self.profile_group.setLayout(profile_layout)
-        layout.addWidget(self.profile_group)
+        row = ttk.Frame(profile_frame)
+        row.pack(fill=tk.X, padx=5, pady=5)
+
+        self._lbl_profile = ttk.Label(row, text=t("conn.profile_label"))
+        self._lbl_profile.pack(side=tk.LEFT)
+
+        self._profile_var = tk.StringVar()
+        self._profile_combo = ttk.Combobox(row, textvariable=self._profile_var, width=25, state="readonly")
+        self._profile_combo.pack(side=tk.LEFT, padx=5)
+        self._profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
+
+        self._btn_save_profile = ttk.Button(row, text=t("conn.save_profile"), command=self._save_profile)
+        self._btn_save_profile.pack(side=tk.LEFT, padx=2)
+        self._btn_delete_profile = ttk.Button(row, text=t("conn.delete_profile"), command=self._delete_profile)
+        self._btn_delete_profile.pack(side=tk.LEFT, padx=2)
+        self._btn_load_env = ttk.Button(row, text=t("conn.load_env"), command=self._load_from_env)
+        self._btn_load_env.pack(side=tk.LEFT, padx=2)
 
         # ── Connection form ──
-        self.form_group = QGroupBox()
-        form_layout = QFormLayout()
+        form_frame = ttk.LabelFrame(self, text=t("conn.settings_group"))
+        form_frame.pack(fill=tk.X, padx=10, pady=5)
+        self._form_frame = form_frame
 
-        self.input_host = QLineEdit("localhost")
-        self.input_port = QSpinBox(); self.input_port.setRange(1, 65535); self.input_port.setValue(3306)
-        self.input_user = QLineEdit()
-        self.input_password = QLineEdit(); self.input_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.input_database = QLineEdit()
-        self.input_charset = QLineEdit("utf8mb4")
+        self._vars = {}
+        fields = [
+            ("host", t("conn.host"), "localhost"),
+            ("port", t("conn.port"), "3306"),
+            ("user", t("conn.user"), ""),
+            ("password", t("conn.password"), ""),
+            ("database", t("conn.database"), ""),
+            ("charset", t("conn.charset"), "utf8mb4"),
+        ]
+        self._form_labels = {}
+        for i, (key, label, default) in enumerate(fields):
+            lbl = ttk.Label(form_frame, text=label, width=12, anchor=tk.E)
+            lbl.grid(row=i, column=0, padx=5, pady=3, sticky=tk.E)
+            self._form_labels[key] = lbl
 
-        self.form_labels = {}
-        for key, widget in [("conn.host", self.input_host), ("conn.port", self.input_port),
-                            ("conn.user", self.input_user), ("conn.password", self.input_password),
-                            ("conn.database", self.input_database), ("conn.charset", self.input_charset)]:
-            lbl = QLabel()
-            self.form_labels[key] = lbl
-            form_layout.addRow(lbl, widget)
-
-        self.form_group.setLayout(form_layout)
-        layout.addWidget(self.form_group)
+            var = tk.StringVar(value=default)
+            self._vars[key] = var
+            if key == "password":
+                entry = ttk.Entry(form_frame, textvariable=var, show="*", width=40)
+            else:
+                entry = ttk.Entry(form_frame, textvariable=var, width=40)
+            entry.grid(row=i, column=1, padx=5, pady=3, sticky=tk.W)
 
         # ── Buttons ──
-        btn_layout = QHBoxLayout()
-        self.btn_test = QPushButton()
-        self.btn_test.clicked.connect(self._test_connection)
-        self.btn_connect = QPushButton()
-        self.btn_connect.clicked.connect(self._connect_and_continue)
-        self.btn_connect.setStyleSheet("font-weight: bold;")
-        self.btn_disconnect = QPushButton()
-        self.btn_disconnect.clicked.connect(self._disconnect)
-        self.btn_disconnect.setEnabled(False)
-        self.btn_reconnect = QPushButton()
-        self.btn_reconnect.clicked.connect(self._reconnect)
-        self.btn_reconnect.setEnabled(False)
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        self.lbl_status = QLabel()
-        btn_layout.addWidget(self.btn_test)
-        btn_layout.addWidget(self.btn_connect)
-        btn_layout.addWidget(self.btn_disconnect)
-        btn_layout.addWidget(self.btn_reconnect)
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.lbl_status)
-        layout.addLayout(btn_layout)
-        layout.addStretch()
+        self._btn_test = ttk.Button(btn_frame, text=t("conn.test"), command=self._test_connection)
+        self._btn_test.pack(side=tk.LEFT, padx=3)
+        self._btn_connect = ttk.Button(btn_frame, text=t("conn.connect"), command=self._connect_and_continue)
+        self._btn_connect.pack(side=tk.LEFT, padx=3)
+        self._btn_disconnect = ttk.Button(btn_frame, text=t("conn.disconnect"), command=self._disconnect, state=tk.DISABLED)
+        self._btn_disconnect.pack(side=tk.LEFT, padx=3)
+        self._btn_reconnect = ttk.Button(btn_frame, text=t("conn.reconnect"), command=self._reconnect, state=tk.DISABLED)
+        self._btn_reconnect.pack(side=tk.LEFT, padx=3)
 
-        self.retranslate()
+        self._lbl_status = ttk.Label(btn_frame, text="", foreground="gray")
+        self._lbl_status.pack(side=tk.RIGHT, padx=10)
 
     def retranslate(self):
-        self.profile_group.setTitle(t("conn.profile_group"))
-        self.lbl_profile.setText(t("conn.profile_label"))
-        self.btn_save_profile.setText(t("conn.save_profile"))
-        self.btn_delete_profile.setText(t("conn.delete_profile"))
-        self.btn_load_env.setText(t("conn.load_env"))
-        self.form_group.setTitle(t("conn.settings_group"))
-        for key, lbl in self.form_labels.items():
-            lbl.setText(t(key))
-        self.btn_test.setText(t("conn.test"))
-        self.btn_connect.setText(t("conn.connect"))
-        self.btn_disconnect.setText(t("conn.disconnect"))
-        self.btn_reconnect.setText(t("conn.reconnect"))
+        self._profile_frame.config(text=t("conn.profile_group"))
+        self._lbl_profile.config(text=t("conn.profile_label"))
+        self._btn_save_profile.config(text=t("conn.save_profile"))
+        self._btn_delete_profile.config(text=t("conn.delete_profile"))
+        self._btn_load_env.config(text=t("conn.load_env"))
+        self._form_frame.config(text=t("conn.settings_group"))
+        label_keys = {"host": "conn.host", "port": "conn.port", "user": "conn.user",
+                      "password": "conn.password", "database": "conn.database", "charset": "conn.charset"}
+        for key, i18n_key in label_keys.items():
+            self._form_labels[key].config(text=t(i18n_key))
+        self._btn_test.config(text=t("conn.test"))
+        self._btn_connect.config(text=t("conn.connect"))
+        self._btn_disconnect.config(text=t("conn.disconnect"))
+        self._btn_reconnect.config(text=t("conn.reconnect"))
 
     # ── Helpers ──
 
     def _get_config(self) -> ConnectionConfig:
         return ConnectionConfig(
-            host=self.input_host.text().strip(),
-            port=self.input_port.value(),
-            user=self.input_user.text().strip(),
-            password=self.input_password.text(),
-            database=self.input_database.text().strip(),
-            charset=self.input_charset.text().strip() or "utf8mb4",
+            host=self._vars["host"].get().strip(),
+            port=int(self._vars["port"].get() or 3306),
+            user=self._vars["user"].get().strip(),
+            password=self._vars["password"].get(),
+            database=self._vars["database"].get().strip(),
+            charset=self._vars["charset"].get().strip() or "utf8mb4",
         )
 
     def _set_config(self, config: ConnectionConfig):
-        self.input_host.setText(config.host)
-        self.input_port.setValue(config.port)
-        self.input_user.setText(config.user)
-        self.input_password.setText(config.password)
-        self.input_database.setText(config.database)
-        self.input_charset.setText(config.charset)
+        self._vars["host"].set(config.host)
+        self._vars["port"].set(str(config.port))
+        self._vars["user"].set(config.user)
+        self._vars["password"].set(config.password)
+        self._vars["database"].set(config.database)
+        self._vars["charset"].set(config.charset)
 
     # ── Actions ──
 
     def _test_connection(self):
-        """Test connection WITHOUT consuming the session — uses a throw-away connection."""
         config = self._get_config()
         from src.db.connection import DatabaseManager
         db = DatabaseManager(config=config)
         if db.connect():
             n = len(db.show_tables())
             db.disconnect()
-            self.lbl_status.setText(t("conn.status_ok", n=n))
-            self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
+            self._lbl_status.config(text=t("conn.status_ok", n=n), foreground="green")
         else:
-            self.lbl_status.setText(t("conn.status_fail"))
-            self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
+            self._lbl_status.config(text=t("conn.status_fail"), foreground="red")
 
     def _connect_and_continue(self):
-        """Establish a PERSISTENT session and proceed."""
         config = self._get_config()
         if not config.database:
-            QMessageBox.warning(self, t("common.error"), t("conn.db_required"))
+            messagebox.showwarning(t("common.error"), t("conn.db_required"))
             return
         session = self._session
         if session.connect(config):
-            self.lbl_status.setText(t("conn.status_active", info=config.display_safe()))
-            self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
-            self.btn_disconnect.setEnabled(True)
-            self.btn_reconnect.setEnabled(True)
-            self.connection_ready.emit(config)
+            self._lbl_status.config(text=t("conn.status_active", info=config.display_safe()), foreground="green")
+            self._btn_disconnect.config(state=tk.NORMAL)
+            self._btn_reconnect.config(state=tk.NORMAL)
+            if self.on_connection_ready:
+                self.on_connection_ready(config)
         else:
-            QMessageBox.critical(self, t("common.error"), t("conn.connect_error"))
+            messagebox.showerror(t("common.error"), t("conn.connect_error"))
 
     def _disconnect(self):
         self._session.disconnect()
-        self.btn_disconnect.setEnabled(False)
-        self.lbl_status.setText(t("conn.status_disconnected"))
-        self.lbl_status.setStyleSheet("color: gray;")
+        self._btn_disconnect.config(state=tk.DISABLED)
+        self._lbl_status.config(text=t("conn.status_disconnected"), foreground="gray")
 
     def _reconnect(self):
         if self._session.reconnect():
-            self.lbl_status.setText(t("conn.status_active", info=self._session.status_text))
-            self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
+            self._lbl_status.config(text=t("conn.status_active", info=self._session.status_text), foreground="green")
         else:
-            self.lbl_status.setText(t("conn.status_fail"))
-            self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
+            self._lbl_status.config(text=t("conn.status_fail"), foreground="red")
 
     # ── Profile management ──
 
     def _load_profiles(self):
-        self.profile_combo.clear()
-        self.profile_combo.addItem("(new)")
-        for name in sorted(load_connection_profiles().keys()):
-            self.profile_combo.addItem(name)
+        names = ["(new)"] + sorted(load_connection_profiles().keys())
+        self._profile_combo["values"] = names
+        if names:
+            self._profile_combo.current(0)
 
-    def _on_profile_selected(self, name: str):
+    def _on_profile_selected(self, event=None):
+        name = self._profile_var.get()
         if name == "(new)" or not name:
             return
         profiles = load_connection_profiles()
@@ -200,17 +188,20 @@ class ConnectionPage(QWidget):
             self._set_config(profiles[name])
 
     def _save_profile(self):
-        name = self.profile_combo.currentText()
+        name = self._profile_var.get()
         if name == "(new)":
-            name = self.input_database.text().strip() or "default"
+            name = self._vars["database"].get().strip() or "default"
         profiles = load_connection_profiles()
         profiles[name] = self._get_config()
         save_connection_profiles(profiles)
         self._load_profiles()
-        self.profile_combo.setCurrentText(name)
+        # Select saved profile
+        values = list(self._profile_combo["values"])
+        if name in values:
+            self._profile_combo.current(values.index(name))
 
     def _delete_profile(self):
-        name = self.profile_combo.currentText()
+        name = self._profile_var.get()
         if name == "(new)":
             return
         profiles = load_connection_profiles()
@@ -221,5 +212,4 @@ class ConnectionPage(QWidget):
     def _load_from_env(self):
         load_dotenv_file()
         self._set_config(ConnectionConfig.from_env())
-        self.lbl_status.setText(t("conn.loaded_env"))
-        self.lbl_status.setStyleSheet("color: blue;")
+        self._lbl_status.config(text=t("conn.loaded_env"), foreground="blue")

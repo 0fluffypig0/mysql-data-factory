@@ -1,404 +1,462 @@
 #!/usr/bin/env python3
 """
-构建用于堡垒机离线部署的最小 Python 运行环境。
+MySQL Data Factory 3.0 — 离线环境构建脚本。
 
-这个脚本的目标非常明确：
-1. 在有网的机器上创建一个专用的 conda 环境。
-2. 根据 requirements.txt 安装项目所需依赖。
-3. 在该环境中安装 conda-pack。
-4. 把整个环境打包成一个 .tar.gz 文件。
-5. 后续把这个压缩包连同项目代码一起带到堡垒机，即可离线部署。
+当前方案：
+1. 下载 Python Embeddable Package (Windows x64)
+2. 额外准备一个同版本的完整 CPython，仅用于提取 tkinter / Tcl / Tk 运行时
+3. 安装 pip 到 embeddable Python
+4. 下载所有依赖 wheel 到 vendor/
+5. 打包成一个 zip，可带到堡垒机离线部署
 
-这个脚本不参与业务数据处理，它只负责“打包离线运行环境”。
-适用场景：
-- 第一次准备堡垒机离线运行包
-- 升级依赖后重新打包
-- 在发布新版本前重新生成最新离线环境
+这样可以同时保留：
+- CLI 的小体积
+- GUI 的 tkinter 运行能力
+- 仍然不依赖 conda-pack
 """
 
-# 这行的作用：
-# 让类型注解在运行时延迟解析。
-# 对实际业务逻辑没有影响，主要是为了让 list[str] 这类注解写起来更自然。
 from __future__ import annotations
 
-# argparse：解析命令行参数，例如 --env-name、--python-version、--rebuild
 import argparse
-
-# subprocess：用于执行外部命令，例如 conda create、pip install、conda-pack
+import json
+import shutil
 import subprocess
-
-# sys：主要用于两件事
-# 1. 获取当前 Python 解释器路径，从而推断默认 conda.bat 路径
-# 2. 在脚本结尾用 sys.exit(main()) 返回退出码
 import sys
-
-# Path：比字符串路径更清晰，适合做路径拼接、存在性检查、绝对路径解析等操作
+import urllib.request
+import zipfile
 from pathlib import Path
 
-
-# ---------------------------------------------------------------------
-# 项目根目录定位
-# ---------------------------------------------------------------------
-# 当前文件一般位于：
-#   <项目根目录>/scripts/build_offline_env.py
-# parents[1] 对应项目根目录
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# ---------------------------------------------------------------------
-# 默认 conda 可执行文件路径
-# ---------------------------------------------------------------------
-# 这里的思路是：
-# 先拿到当前正在运行这个脚本的 Python 解释器路径，例如：
-#   D:\016.Miniconda\python.exe
-# 然后假定同级结构下存在：
-#   D:\016.Miniconda\condabin\conda.bat
-#
-# 这个默认值适合你当前这种“用 Miniconda 自己的 Python 去执行脚本”的场景。
-DEFAULT_CONDA_EXE = Path(sys.executable).resolve().parent / "condabin" / "conda.bat"
+PYTHON_EMBED_URL = "https://www.python.org/ftp/python/{version}/python-{version}-embed-amd64.zip"
+PYTHON_INSTALLER_URL = "https://www.python.org/ftp/python/{version}/python-{version}-amd64.exe"
+GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 
 
-def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """
-    执行一条外部命令，并在控制台打印该命令。
+def download_file(url: str, dest: Path) -> None:
+    """下载文件到指定路径。"""
+    print(f"[DOWNLOAD] {url}")
+    print(f"        -> {dest}")
+    urllib.request.urlretrieve(url, str(dest))
+    size_mb = dest.stat().st_size / (1024 * 1024)
+    print(f"        OK ({size_mb:.1f} MB)")
 
-    参数说明：
-    - cmd：要执行的命令列表，例如 ["cmd.exe", "/d", "/c", "conda.bat", "--version"]
-    - check：如果为 True，则当返回码不是 0 时抛出异常
 
-    设计目的：
-    - 所有外部命令都走这个统一入口，方便排查问题
-    - 先把命令打印出来，便于人工确认脚本到底做了什么
-    - 若失败则统一抛出 RuntimeError，而不是到处手写 returncode 判断
-    """
-
-    # 把命令打印出来，方便人工排查
+def run_checked(cmd: list[str], cwd: Path | None = None) -> None:
+    """Run a command with readable console output."""
     print(f"[RUN] {' '.join(cmd)}")
-
-    # 执行命令
-    # cwd=PROJECT_ROOT：确保命令在项目根目录下执行
-    # text=True：让 stdout/stderr 按文本方式处理，而不是 bytes
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT, text=True)
-
-    # 如果要求 check，并且命令执行失败，则抛异常
-    if check and result.returncode != 0:
-        raise RuntimeError(f"Command failed: {' '.join(cmd)}")
-
-    return result
+    subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True)
 
 
-def conda_command(conda_exe: Path, *args: str) -> list[str]:
-    """
-    生成一条可执行的 conda 命令列表。
-
-    之所以单独封装，是因为：
-    - Windows 下如果 conda 可执行文件是 .bat，就不能像普通 exe 那样直接调用
-    - 这时需要通过：
-        cmd.exe /d /c conda.bat ...
-      的形式执行
-    - 如果不是 .bat，则直接执行即可
-
-    参数：
-    - conda_exe：conda 的实际路径
-    - *args：要传给 conda 的后续参数，例如 "create", "-p", "xxx"
-
-    返回：
-    - 一条可直接交给 subprocess.run() 的命令列表
-    """
-
-    # 如果 conda_exe 是 .bat 文件（Windows 常见情况）
-    if conda_exe.suffix.lower() == ".bat":
-        # 通过 cmd.exe 调用 .bat
-        # /d：禁用 AutoRun，减少环境干扰
-        # /c：执行完后退出
-        return ["cmd.exe", "/d", "/c", str(conda_exe), *args]
-
-    # 如果不是 .bat，例如是 conda.exe 或其他可执行文件，则直接调用
-    return [str(conda_exe), *args]
+def major_minor(version: str) -> str:
+    """Return major.minor for a full version string."""
+    parts = version.split(".")
+    return ".".join(parts[:2])
 
 
-def conda_env_exists(conda_exe: Path, env_prefix: Path) -> bool:
-    """
-    判断指定的 conda 环境是否已经存在且可用。
-
-    检查方式非常直接：
-    - 尝试执行：
-        conda run -p <env_prefix> python --version
-    - 如果返回码为 0，说明这个环境存在并可正常运行 Python
-    - 否则视为不存在或不可用
-
-    这样做的好处：
-    - 不依赖 conda env list 的文本解析
-    - 判断标准更贴近真实使用场景：这个环境到底能不能跑 Python
-    """
-
+def python_version_mm(python_exe: Path) -> str:
+    """Query a Python executable for its major.minor version."""
     result = subprocess.run(
-        conda_command(conda_exe, "run", "-p", str(env_prefix), "python", "--version"),
-        cwd=PROJECT_ROOT,
-        stdout=subprocess.DEVNULL,   # 不打印输出，避免刷屏
-        stderr=subprocess.DEVNULL,   # 不打印错误，失败仅通过返回码判断
+        [str(python_exe), "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+        check=True,
+        capture_output=True,
         text=True,
     )
+    return result.stdout.strip()
 
-    return result.returncode == 0
+
+def enable_embed_lib_imports(pth_file: Path) -> None:
+    """Enable import site and make Lib/ importable in the embeddable runtime."""
+    original_lines = pth_file.read_text(encoding="utf-8").splitlines()
+    normalized = [line.strip() for line in original_lines]
+
+    output_lines: list[str] = []
+    inserted = False
+    for line in original_lines:
+        stripped = line.strip()
+        if stripped in {"#import site", "import site"}:
+            if "Lib" not in normalized:
+                output_lines.append("Lib")
+            if "Lib\\site-packages" not in normalized:
+                output_lines.append("Lib\\site-packages")
+            output_lines.append("import site")
+            inserted = True
+        else:
+            output_lines.append(line)
+
+    if not inserted:
+        if "Lib" not in normalized:
+            output_lines.append("Lib")
+        if "Lib\\site-packages" not in normalized:
+            output_lines.append("Lib\\site-packages")
+        output_lines.append("import site")
+
+    pth_file.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+
+
+def install_full_python_for_tk(version: str, work_dir: Path) -> Path:
+    """Install the official CPython runtime into a temp directory to harvest Tk assets."""
+    print()
+    print("=" * 50)
+    print("Step 1.5: Install Full Python Runtime For Tk")
+    print("=" * 50)
+
+    installer_exe = work_dir / f"python-{version}-amd64.exe"
+    download_file(PYTHON_INSTALLER_URL.format(version=version), installer_exe)
+
+    full_python_dir = work_dir / f"python-full-{version}"
+    if full_python_dir.exists():
+        shutil.rmtree(full_python_dir)
+    full_python_dir.mkdir(parents=True)
+
+    run_checked([
+        str(installer_exe),
+        "/quiet",
+        f"TargetDir={full_python_dir}",
+        "InstallAllUsers=0",
+        "PrependPath=0",
+        "Shortcuts=0",
+        "AssociateFiles=0",
+        "CompileAll=0",
+        "Include_doc=0",
+        "Include_test=0",
+        "Include_launcher=0",
+        "Include_pip=0",
+        "Include_tcltk=1",
+        "SimpleInstall=1",
+    ])
+
+    python_exe = full_python_dir / "python.exe"
+    if not python_exe.exists():
+        raise RuntimeError(f"Full Python install did not produce python.exe at {python_exe}")
+
+    print(f"[OK] Installed full Python runtime to {full_python_dir}")
+    return python_exe
+
+
+def discover_tk_assets(python_exe: Path) -> dict[str, str]:
+    """Query a Python runtime for the files needed by tkinter."""
+    helper = """
+import json
+import pathlib
+import sys
+import tkinter
+import _tkinter
+
+interp = tkinter.Tcl()
+base = pathlib.Path(sys.base_prefix).resolve()
+tcl_lib = pathlib.Path(interp.eval("info library")).resolve()
+tk_lib = tcl_lib.parent / ("tk" + tcl_lib.name[3:])
+if not tk_lib.exists():
+    candidates = sorted(p for p in tcl_lib.parent.glob("tk*") if p.is_dir())
+    if candidates:
+        tk_lib = candidates[0]
+
+dll_names = ["tcl86t.dll", "tk86t.dll", "tcldde14.dll", "tclreg13.dll"]
+dll_map = {}
+for name in dll_names:
+    matches = list(base.rglob(name))
+    if matches:
+        dll_map[name] = str(matches[0].resolve())
+
+payload = {
+    "base_prefix": str(base),
+    "tkinter_pkg": str(pathlib.Path(tkinter.__file__).resolve().parent),
+    "_tkinter_pyd": str(pathlib.Path(_tkinter.__file__).resolve()),
+    "tcl_lib": str(tcl_lib),
+    "tk_lib": str(tk_lib) if tk_lib.exists() else "",
+    "tcl_dll": dll_map.get("tcl86t.dll", ""),
+    "tk_dll": dll_map.get("tk86t.dll", ""),
+    "tcldde_dll": dll_map.get("tcldde14.dll", ""),
+    "tclreg_dll": dll_map.get("tclreg13.dll", ""),
+}
+print(json.dumps(payload))
+""".strip()
+
+    result = subprocess.run(
+        [str(python_exe), "-c", helper],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    data = json.loads(result.stdout.strip())
+
+    required = ["tkinter_pkg", "_tkinter_pyd", "tcl_lib", "tk_lib", "tcl_dll", "tk_dll"]
+    missing = [key for key in required if not data.get(key)]
+    if missing:
+        raise RuntimeError(f"tk asset discovery incomplete for {python_exe}: missing {missing}")
+
+    return data
+
+
+def copy_optional_file(src: str, dest_dir: Path) -> None:
+    """Copy an optional file when it exists."""
+    if not src:
+        return
+    src_path = Path(src)
+    if not src_path.exists():
+        return
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_path, dest_dir / src_path.name)
+
+
+def copy_dir(src: Path, dest: Path) -> None:
+    """Replace a directory with a fresh copy."""
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest)
+
+
+def copy_tk_assets(source_python: Path, target_python_dir: Path) -> None:
+    """Copy tkinter, Tcl, and Tk runtime files into the embeddable package."""
+    print()
+    print("=" * 50)
+    print("Step 1.6: Copy Tkinter / Tcl / Tk Assets")
+    print("=" * 50)
+
+    tk_assets = discover_tk_assets(source_python)
+
+    lib_dir = target_python_dir / "Lib"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+
+    copy_dir(Path(tk_assets["tkinter_pkg"]), lib_dir / "tkinter")
+    shutil.copy2(Path(tk_assets["_tkinter_pyd"]), target_python_dir / "_tkinter.pyd")
+    copy_optional_file(tk_assets["tcl_dll"], target_python_dir)
+    copy_optional_file(tk_assets["tk_dll"], target_python_dir)
+
+    tcl_root = target_python_dir / "tcl"
+    tcl_root.mkdir(parents=True, exist_ok=True)
+
+    tcl_lib = Path(tk_assets["tcl_lib"])
+    tk_lib = Path(tk_assets["tk_lib"])
+    copy_dir(tcl_lib, tcl_root / tcl_lib.name)
+    copy_dir(tk_lib, tcl_root / tk_lib.name)
+
+    for extra_dir_name in ["dde1.4", "reg1.3"]:
+        extra_src = tcl_lib.parent / extra_dir_name
+        if extra_src.exists():
+            copy_dir(extra_src, tcl_root / extra_dir_name)
+    copy_optional_file(tk_assets.get("tcldde_dll", ""), tcl_root / "dde1.4")
+    copy_optional_file(tk_assets.get("tclreg_dll", ""), tcl_root / "reg1.3")
+
+    sitecustomize = (
+        "from __future__ import annotations\n"
+        "import os\n"
+        "from pathlib import Path\n\n"
+        "_ROOT = Path(__file__).resolve().parent\n"
+        "_TCL = _ROOT / 'tcl' / 'tcl8.6'\n"
+        "_TK = _ROOT / 'tcl' / 'tk8.6'\n"
+        "if _TCL.exists():\n"
+        "    os.environ.setdefault('TCL_LIBRARY', str(_TCL))\n"
+        "if _TK.exists():\n"
+        "    os.environ.setdefault('TK_LIBRARY', str(_TK))\n"
+    )
+    (target_python_dir / "sitecustomize.py").write_text(sitecustomize, encoding="utf-8")
+
+    print(f"[OK] tkinter package copied from {tk_assets['tkinter_pkg']}")
+    print(f"[OK] Tcl library copied from {tcl_lib}")
+    print(f"[OK] Tk library copied from {tk_lib}")
 
 
 def parse_args() -> argparse.Namespace:
-    """
-    解析命令行参数。
-
-    本脚本支持的参数主要围绕“如何创建并打包这个离线环境”：
-
-    - env-name：环境名字
-    - env-prefix：环境安装目录
-    - python-version：Python 版本
-    - output-dir：输出目录
-    - requirements：requirements.txt 路径
-    - conda-exe：conda 可执行文件路径
-    - rebuild：是否强制重建环境
-    """
-
     parser = argparse.ArgumentParser(
-        description="Build a minimal conda-pack offline environment for mysql-data-factory.",
+        description="Build offline deployment package for mysql-data-factory 3.0.",
     )
-
-    # 环境名称
-    # 主要用于输出文件命名，例如 mysql_factory_env.tar.gz
-    parser.add_argument("--env-name", default="mysql_factory")
-
-    # 环境安装目录
-    # 如果不传，就默认放到：
-    #   <项目根目录>/.offline_envs/<env-name>
     parser.add_argument(
-        "--env-prefix",
+        "--python-version",
+        default="3.11.9",
+        help="Python embeddable version to download (default: 3.11.9)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=str(PROJECT_ROOT / "env_export"),
+        help="Output directory for the deployment package",
+    )
+    parser.add_argument(
+        "--requirements",
+        default=str(PROJECT_ROOT / "requirements.txt"),
+        help="Path to requirements.txt",
+    )
+    parser.add_argument(
+        "--tk-source-python",
         default="",
-        help="Optional explicit conda environment prefix. Defaults to .offline_envs/<env-name> under the repo.",
+        help=(
+            "Optional path to a full Python executable with tkinter matching --python-version. "
+            "If omitted, the script installs an official CPython runtime temporarily and harvests Tk assets from it."
+        ),
     )
-
-    # Python 版本
-    parser.add_argument("--python-version", default="3.10")
-
-    # 输出目录
-    # 默认输出到项目根目录下的 env_export/
-    parser.add_argument("--output-dir", default=str(PROJECT_ROOT / "env_export"))
-
-    # requirements.txt 路径
-    parser.add_argument("--requirements", default=str(PROJECT_ROOT / "requirements.txt"))
-
-    # conda 可执行文件路径
-    parser.add_argument("--conda-exe", default=str(DEFAULT_CONDA_EXE))
-
-    # --rebuild：
-    # 如果目标环境已存在，则先删除再重建
-    parser.add_argument(
-        "--rebuild",
-        action="store_true",
-        help="Remove the target conda environment first if it already exists.",
-    )
-
     return parser.parse_args()
 
 
 def main() -> int:
-    """
-    脚本主入口。
-
-    主流程非常直白，适合在评审或说明会上逐步讲解：
-
-    1. 解析参数
-    2. 解析 requirements / output / conda / env_prefix 路径
-    3. 检查关键文件是否存在
-    4. 先执行 conda --version，确认 conda 可用
-    5. 如果要求 rebuild 且环境已存在，则删除环境
-    6. 如果环境不存在，则创建新环境
-    7. 在环境中安装 requirements.txt 依赖
-    8. 在环境中安装 conda-pack
-    9. 调用 conda-pack 把环境打包成 .tar.gz
-    10. 检查输出包是否真的生成
-    11. 打印结果摘要
-
-    这个脚本不处理任何业务数据，只负责“准备堡垒机的离线 Python 运行环境”。
-    """
-
-    # 解析命令行参数
     args = parse_args()
 
-    # requirements 文件路径
     requirements_file = Path(args.requirements).resolve()
-
-    # 输出目录
     output_dir = Path(args.output_dir).resolve()
+    python_version = args.python_version
 
-    # 最终输出的离线环境包名，例如：
-    #   env_export/mysql_factory_env.tar.gz
-    output_file = output_dir / f"{args.env_name}_env.tar.gz"
-
-    # conda 可执行文件路径
-    conda_exe = Path(args.conda_exe).resolve()
-
-    # conda 环境实际安装目录：
-    # - 如果用户显式给了 --env-prefix，就使用那个目录
-    # - 否则默认使用项目内的 .offline_envs/<env-name>
-    env_prefix = (
-        Path(args.env_prefix).resolve()
-        if args.env_prefix
-        else (PROJECT_ROOT / ".offline_envs" / args.env_name)
-    )
-
-    # -------------------------------------------------------------
-    # 第一步：前置检查
-    # -------------------------------------------------------------
-    # requirements 文件不存在，直接失败
     if not requirements_file.exists():
         print(f"[ERROR] requirements file not found: {requirements_file}")
         return 1
 
-    # conda 可执行文件不存在，也直接失败
-    if not conda_exe.exists():
-        print(f"[ERROR] conda executable not found: {conda_exe}")
-        return 1
+    work_dir = PROJECT_ROOT / ".build_tmp"
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True)
 
     try:
-        # ---------------------------------------------------------
-        # 第二步：先确认 conda 本身可用
-        # ---------------------------------------------------------
-        # 这一步的目的不是创建环境，只是先确认 conda 能执行
-        run(conda_command(conda_exe, "--version"))
+        print()
+        print("=" * 50)
+        print("Step 1: Download Python Embeddable Package")
+        print("=" * 50)
 
-        # ---------------------------------------------------------
-        # 第三步：如果指定了 --rebuild，且环境已存在，则先删除
-        # ---------------------------------------------------------
-        if args.rebuild and conda_env_exists(conda_exe, env_prefix):
-            run(conda_command(conda_exe, "remove", "-p", str(env_prefix), "--all", "-y"))
+        embed_url = PYTHON_EMBED_URL.format(version=python_version)
+        embed_zip = work_dir / f"python-{python_version}-embed-amd64.zip"
+        download_file(embed_url, embed_zip)
 
-        # ---------------------------------------------------------
-        # 第四步：如果环境不存在，则创建新环境
-        # ---------------------------------------------------------
-        if not conda_env_exists(conda_exe, env_prefix):
-            # 确保父目录存在
-            env_prefix.parent.mkdir(parents=True, exist_ok=True)
+        python_dir = work_dir / "python"
+        python_dir.mkdir()
+        with zipfile.ZipFile(embed_zip, "r") as zf:
+            zf.extractall(python_dir)
+        print(f"[OK] Extracted to {python_dir}")
 
-            # 创建 conda 环境
-            # 这里默认安装：
-            # - 指定版本 Python
-            # - pip
-            run(
-                conda_command(
-                    conda_exe,
-                    "create",
-                    "-p",
-                    str(env_prefix),
-                    f"python={args.python_version}",
-                    "pip",
-                    "-y",
-                )
-            )
+        pth_files = list(python_dir.glob("python*._pth"))
+        if pth_files:
+            enable_embed_lib_imports(pth_files[0])
+            print(f"[OK] Enabled site-packages and Lib imports in {pth_files[0].name}")
+
+        python_exe = python_dir / "python.exe"
+        if not python_exe.exists():
+            print("[ERROR] python.exe not found in embeddable package")
+            return 1
+
+        tk_source_python = Path(args.tk_source_python).resolve() if args.tk_source_python else None
+        if tk_source_python is not None:
+            if not tk_source_python.exists():
+                print(f"[ERROR] Tk source Python not found: {tk_source_python}")
+                return 1
+            source_mm = python_version_mm(tk_source_python)
+            target_mm = major_minor(python_version)
+            if source_mm != target_mm:
+                print(f"[ERROR] Tk source Python version mismatch: source={source_mm}, target={target_mm}")
+                return 1
         else:
-            # 如果环境已存在且没要求 rebuild，就直接复用
-            print(f"[INFO] Reusing existing conda environment: {env_prefix}")
+            tk_source_python = install_full_python_for_tk(python_version, work_dir)
 
-        # ---------------------------------------------------------
-        # 第五步：安装 requirements.txt 中的依赖
-        # ---------------------------------------------------------
-        # 这里使用：
-        #   conda run -p <env_prefix> python -m pip install -r requirements.txt
-        # 目的是确保依赖安装到指定环境，而不是当前系统 Python
-        run(
-            conda_command(
-                conda_exe,
-                "run",
-                "-p",
-                str(env_prefix),
-                "python",
+        copy_tk_assets(tk_source_python, python_dir)
+
+        print()
+        print("=" * 50)
+        print("Step 2: Install pip into embeddable Python")
+        print("=" * 50)
+
+        get_pip = work_dir / "get-pip.py"
+        download_file(GET_PIP_URL, get_pip)
+
+        run_checked(
+            [str(python_exe), str(get_pip), "--no-warn-script-location"],
+            cwd=python_dir,
+        )
+        print("[OK] pip installed")
+
+        print()
+        print("=" * 50)
+        print("Step 3: Download wheels for all dependencies")
+        print("=" * 50)
+
+        vendor_dir = work_dir / "vendor"
+        vendor_dir.mkdir()
+
+        subprocess.run(
+            [
+                str(python_exe),
                 "-m",
                 "pip",
-                "install",
+                "download",
                 "-r",
                 str(requirements_file),
-            )
+                "-d",
+                str(vendor_dir),
+                "--only-binary=:all:",
+                "--platform=win_amd64",
+                "--python-version",
+                major_minor(python_version),
+            ],
+            check=False,
+        )
+        run_checked(
+            [str(python_exe), "-m", "pip", "download", "-r", str(requirements_file), "-d", str(vendor_dir)]
+        )
+        wheel_count = len(list(vendor_dir.glob("*")))
+        print(f"[OK] Downloaded {wheel_count} packages to vendor/")
+
+        print()
+        print("=" * 50)
+        print("Step 4: Assemble deployment package")
+        print("=" * 50)
+
+        deploy_dir = work_dir / "mysql_factory_env"
+        deploy_dir.mkdir()
+
+        shutil.copytree(python_dir, deploy_dir / "python")
+        shutil.copytree(vendor_dir, deploy_dir / "vendor")
+
+        install_bat = deploy_dir / "install.bat"
+        install_bat.write_text(
+            '@echo off\n'
+            'chcp 65001 >nul\n'
+            'echo Installing dependencies from vendor...\n'
+            'set "PYTHON=%~dp0python\\python.exe"\n'
+            'set "TCL_LIBRARY=%~dp0python\\tcl\\tcl8.6"\n'
+            'set "TK_LIBRARY=%~dp0python\\tcl\\tk8.6"\n'
+            '"%PYTHON%" -m pip install --no-index --find-links="%~dp0vendor" '
+            '-r "%~dp0..\\requirements.txt" --no-warn-script-location\n'
+            'if errorlevel 1 (\n'
+            '    echo [ERROR] Installation failed.\n'
+            '    exit /b 1\n'
+            ')\n'
+            'echo [OK] All dependencies installed.\n'
+            '"%PYTHON%" --version\n'
+            '"%PYTHON%" -c "import pymysql, tkinter as tk; print(\'pymysql OK\'); print(tk.Tcl().eval(\'info library\'))"\n',
+            encoding="utf-8",
         )
 
-        # ---------------------------------------------------------
-        # 第六步：在目标环境中安装 conda-pack
-        # ---------------------------------------------------------
-        # 因为后面打包环境要靠 conda-pack，所以这里显式装进去
-        run(
-            conda_command(
-                conda_exe,
-                "run",
-                "-p",
-                str(env_prefix),
-                "python",
-                "-m",
-                "pip",
-                "install",
-                "conda-pack",
-            )
-        )
-
-        # ---------------------------------------------------------
-        # 第七步：准备输出目录
-        # ---------------------------------------------------------
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        # 如果输出文件已存在，先删掉旧文件，避免和旧包混淆
+        output_file = output_dir / "mysql_factory_env.zip"
         if output_file.exists():
             output_file.unlink()
 
-        # ---------------------------------------------------------
-        # 第八步：正式打包环境
-        # ---------------------------------------------------------
-        # 使用 conda-pack 的 CLI 入口：
-        #   python -m conda_pack.cli
-        #
-        # 参数说明：
-        # -p <env_prefix>：指定要打包的环境路径
-        # -o <output_file>：指定输出 tar.gz 文件
-        # --force：允许覆盖已有输出文件
-        run(
-            conda_command(
-                conda_exe,
-                "run",
-                "-p",
-                str(env_prefix),
-                "python",
-                "-m",
-                "conda_pack.cli",
-                "-p",
-                str(env_prefix),
-                "-o",
-                str(output_file),
-                "--force",
-            )
-        )
+        print(f"[PACK] Creating {output_file}...")
+        with zipfile.ZipFile(output_file, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in deploy_dir.rglob("*"):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(deploy_dir.parent)
+                    zf.write(file_path, arcname)
 
-        # ---------------------------------------------------------
-        # 第九步：检查打包结果是否真实存在
-        # ---------------------------------------------------------
-        if not output_file.exists():
-            print(f"[ERROR] output file was not created: {output_file}")
-            return 1
-
-        # 计算输出文件大小（MB）
         size_mb = output_file.stat().st_size / (1024 * 1024)
 
-        # ---------------------------------------------------------
-        # 第十步：输出结果摘要
-        # ---------------------------------------------------------
         print()
-        print("Build complete.")
-        print(f"Environment prefix: {env_prefix}")
+        print("=" * 50)
+        print("Build complete!")
+        print("=" * 50)
         print(f"Output: {output_file}")
-        print(f"Size: {size_mb:.2f} MB")
-        print("Next step: copy the repository plus env_export/ to the bastion host and run bin\\setup_offline.bat.")
+        print(f"Size: {size_mb:.1f} MB")
+        print(f"Python: {python_version} (embeddable + tkinter)")
+        print()
+        print("Next steps:")
+        print("  1. Copy the whole project folder plus env_export/ to the bastion host")
+        print("  2. Run bin\\setup_offline.bat")
+        print("  3. Run bin\\test_connection.bat")
+        print("  4. Run bin\\run_gui.bat")
         return 0
 
-    except RuntimeError as exc:
-        # 统一处理 run() 抛出的命令执行异常
+    except Exception as exc:
         print(f"[ERROR] {exc}")
         return 1
+    finally:
+        if work_dir.exists():
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
-# 标准 Python 脚本入口
-# 只有当这个文件被直接运行时，才会执行 main()
 if __name__ == "__main__":
     sys.exit(main())

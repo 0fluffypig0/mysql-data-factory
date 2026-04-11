@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 2.0 - Cleanup CLI
+MySQL Data Factory 3.00 - Cleanup CLI
 
 Delete test data by campaign_id, PK range, or marker column.
 
@@ -157,3 +157,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

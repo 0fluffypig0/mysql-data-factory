@@ -80,7 +80,6 @@ target/
 
 # Workflow outputs
 data/
-env_export/
 .offline_envs/
 .env.smoke
 .env.backup.smoke
@@ -214,7 +213,7 @@ marimo/_lsp/
 __marimo__/
 
 # ==============================================
-# MySQL Data Factory 2.0 - Project-specific
+# MySQL Data Factory 3.00 - Project-specific
 # ==============================================
 
 # Data output directories (generated at runtime — keep dir skeleton via .gitkeep)
@@ -236,8 +235,11 @@ sql/cleanup/**
 !sql/cleanup/.gitkeep
 
 # Offline environment
-env_export/
+.build_tmp/
 .offline_envs/
+runtime/
+env_export/*
+!env_export/mysql_factory_env.zip
 
 # Local env files
 .env
@@ -279,3 +281,5 @@ delivery/
 !data/output/.gitkeep
 !data/export/.gitkeep
 !data/preview/.gitkeep
+
+

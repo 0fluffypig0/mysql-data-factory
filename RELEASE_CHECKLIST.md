@@ -1,106 +1,74 @@
-# MySQL Data Factory — Release Checklist
+# MySQL Data Factory 3.00 — Release Checklist
 
-Use this checklist before each public release.
-
----
-
-## Pre-Release Validation
-
-### Core Functionality
-
-- [ ] `python scripts/smoke_test.py` — passes without insert
-- [ ] `python scripts/smoke_test.py --insert --rows 10` — 10 rows inserted OK
-- [ ] `python scripts/pressure_test_100k.py --rows 100000` — 0 failed batches
-- [ ] `python scripts/cleanup.py --dry-run` — correctly counts rows
-- [ ] `python scripts/cleanup.py --execute` — correctly deletes rows
-- [ ] `python scripts/wizard.py --help` — help text displays
-
-### GUI
-
-- [ ] GUI launches without error (`python scripts/ui_app.py`)
-- [ ] Connection page: test + connect works
-- [ ] Scan page: scan completes, tables listed
-- [ ] Tasks page: table selection, row count, PK mode all configurable
-- [ ] Preview page: generated data looks correct
-- [ ] Execute page: campaign runs, progress updates in real time
-- [ ] History page: reports and plans visible, cleanup works
-- [ ] Language switcher: zh_CN / en / ja all switch correctly
-
-### Cleanup Dialog
-
-- [ ] Dry-run shows estimated rows per table
-- [ ] Execute confirmation dialog shows ALL affected tables
-- [ ] Execute actually deletes the rows
-
-### Output Files
-
-- [ ] Campaign directory uses new naming: `{ts}_JST__{short_id}__{db}/`
-- [ ] Table directory naming: `{idx}__{table}__pk_{col}__rows_{n}/`
-- [ ] `campaign_manifest.json` generated
-- [ ] `campaign_summary.csv` generated
-- [ ] `table_manifest.json` generated per table
-- [ ] Cleanup SQL generated at `sql/cleanup/cleanup_{cid}.sql`
-- [ ] Reports saved at `reports/report_{cid}_{table}.json`
+Use this checklist before publishing a new 3.x release.
 
 ---
 
-## Repository State
+## Core Validation
 
-### Files
-
-- [ ] `README.md` is accurate and up to date
-- [ ] `DEPLOYMENT.md` covers online build and offline deploy
-- [ ] `ARCHITECTURE.md` reflects current code structure
-- [ ] `USER_GUIDE_2.0.md` covers all main workflows
-- [ ] `RELEASE_NOTES_2.0.md` lists all new features
-- [ ] `QUICKSTART.md` provides 5-minute on-ramp
-- [ ] `RELEASE_CHECKLIST.md` (this file) is complete
-- [ ] `environment.yml` and `requirements.txt` are in sync
-- [ ] `LICENSE` is present
-
-### .gitignore
-
-- [ ] `.env` excluded (credentials)
-- [ ] `.env.local`, `.env.smoke`, `.env.remote_*` excluded
-- [ ] `config/connection_profiles.json` excluded (credentials)
-- [ ] `metadata_cache/` excluded (runtime data)
-- [ ] `plans/`, `reports/`, `sql/cleanup/`, `data/output/` excluded (runtime data)
-- [ ] `env_export/`, `delivery/`, `dist/` excluded (binaries)
-- [ ] `.claude/` excluded (AI session data)
-- [ ] `.gitkeep` files present in excluded runtime directories
-
-### No Junk
-
-- [ ] No temporary test files committed
-- [ ] No real credentials in any committed file
-- [ ] No leftover `TODAY_*.md` or `SPRINT_REPORT_*.md`
-- [ ] `_audit_tmp/` not committed
-- [ ] `task_templates/` excluded or empty
-
-### Version
-
-- [ ] Version string updated in `README.md` header
-- [ ] `RELEASE_NOTES_2.0.md` has correct version and date
-- [ ] Git tag created: `v2.0.0`
+- [ ] `python scripts/test_connection.py --env-file .env` succeeds
+- [ ] `python scripts/smoke_test.py --env-file .env --table <table> --rows 5` succeeds
+- [ ] `python scripts/smoke_test.py --env-file .env --table <table> --rows 10 --insert` succeeds
+- [ ] `python scripts/pressure_test_100k.py --env-file .env --table <table> --rows 100000` completes without failed batches
+- [ ] `python scripts/cleanup.py --dry-run` works on saved report data
+- [ ] `python scripts/cleanup.py --execute` deletes the intended rows only
+- [ ] `python scripts/wizard.py --help` prints normally
+- [ ] `python scripts/test_v3_full.py --env-file .env` passes if a full live validation is required for the release
 
 ---
 
-## Offline Deployment Validation (if new env build)
+## GUI Validation
+
+- [ ] `python scripts/ui_app.py` launches locally
+- [ ] `bin\run_gui.bat` launches from the offline runtime
+- [ ] Connection page works
+- [ ] Scan page works
+- [ ] Tasks page works
+- [ ] Preview page works
+- [ ] Execute page works
+- [ ] History page works
+- [ ] zh_CN / en / ja language switching works
+
+---
+
+## Offline Bundle Validation
 
 - [ ] `python scripts/build_offline_env.py` completes without error
-- [ ] `env_export/mysql_factory_env.tar.gz` exists and is non-zero size
-- [ ] `bin\setup_offline.bat` runs successfully on a clean machine
-- [ ] `C:\tools\mysql_factory_env\python.exe --version` returns 3.11.x
-- [ ] `import PySide6, pymysql, pandas` succeeds in offline env
-- [ ] GUI and CLI work from the offline env
+- [ ] `env_export/mysql_factory_env.zip` exists and is non-zero size
+- [ ] `bin\setup_offline.bat` succeeds on a clean unpacked project
+- [ ] `runtime\mysql_factory_env\python\python.exe --version` works
+- [ ] `import pymysql` succeeds in the offline runtime
+- [ ] `import tkinter` succeeds in the offline runtime
+- [ ] `bin\test_connection.bat` succeeds from the offline runtime
+
+---
+
+## Repository Hygiene
+
+- [ ] `README.md` matches the current release behavior
+- [ ] `DEPLOYMENT.md` matches the current packaging flow
+- [ ] `ARCHITECTURE.md` reflects the tkinter + embeddable runtime design
+- [ ] `USER_GUIDE_3.0.md` reflects the current GUI/CLI workflow
+- [ ] `RELEASE_NOTES_3.0.md` matches the tested release state
+- [ ] `.gitignore` excludes runtime and generated data correctly
+- [ ] no real credentials are tracked
+- [ ] no `runtime/`, `data/`, `reports/`, or other generated junk are tracked accidentally
+
+---
+
+## Versioning
+
+- [ ] user-facing release version is `3.00`
+- [ ] package semantic version is `3.0.0`
+- [ ] Git tag prepared: `v3.0.0`
 
 ---
 
 ## Final Sign-Off
 
-- [ ] All validation checks above completed
-- [ ] 100k insertion test passed with 0 failures
-- [ ] Cleanup of test data confirmed
-- [ ] Documentation reviewed for accuracy
-- [ ] Repository is clean (`git status` shows no untracked junk)
-- [ ] Ready to tag `v2.0.0` and push to GitHub
+- [ ] release artifact reviewed
+- [ ] source tree reviewed
+- [ ] offline install path verified
+- [ ] cleanup safety verified
+- [ ] ready to push `main`
+- [ ] ready to push tag `v3.0.0`

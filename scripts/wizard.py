@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 2.0 - CLI Wizard
+MySQL Data Factory 3.00 - CLI Wizard
 
 Interactive command-line wizard for configuring and executing
 multi-table data generation campaigns.
@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="MySQL Data Factory 2.0 CLI Wizard")
+    parser = argparse.ArgumentParser(description="MySQL Data Factory 3.00 CLI Wizard")
     parser.add_argument("--env-file", default=".env")
     return parser.parse_args()
 
@@ -41,7 +41,7 @@ def main() -> int:
     paths.ensure_all()
 
     print("=" * 60)
-    print("  MySQL Data Factory 2.0 - CLI Wizard")
+    print("  MySQL Data Factory 3.00 - CLI Wizard")
     print("=" * 60)
     print()
 
@@ -167,3 +167,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+

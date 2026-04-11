@@ -85,7 +85,7 @@ class DatabaseScanResult:
     database_name: str
     tables: dict[str, TableMetadata] = field(default_factory=dict)
     scan_time: str = ""
-    scan_version: str = "2.0"
+    scan_version: str = "3.0"
 
     def __post_init__(self):
         if not self.scan_time:
@@ -108,7 +108,7 @@ class DatabaseScanResult:
             database_name=data.get("database_name", ""),
             tables=tables,
             scan_time=data.get("scan_time", ""),
-            scan_version=data.get("scan_version", "2.0"),
+            scan_version=data.get("scan_version", "3.0"),
         )
 
     def to_json(self, indent: int = 2) -> str:
@@ -121,3 +121,5 @@ class DatabaseScanResult:
     @property
     def table_names(self) -> list[str]:
         return sorted(self.tables.keys())
+
+

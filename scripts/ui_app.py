@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 2.0 - GUI Application Entry Point
+MySQL Data Factory 3.00 - GUI Application Entry Point
 
 Usage:
     python scripts/ui_app.py
@@ -21,3 +21,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

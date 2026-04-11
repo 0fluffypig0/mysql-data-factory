@@ -1,14 +1,13 @@
 """
 Page 2: Database Scan — uses shared session, JST timestamps, i18n.
+V3.0: tkinter version.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal, QThread, QObject
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar, QMessageBox,
-)
+import threading
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 from src.config.app_config import AppPaths
 from src.metadata.models import DatabaseScanResult
@@ -18,128 +17,102 @@ from src.ui.session import SessionManager
 from src.utils.timezone import now_jst_str
 
 
-class ScanWorker(QObject):
-    progress = Signal(int, int, str)
-    finished = Signal(object)
-    error = Signal(str)
-
-    def __init__(self, session: SessionManager):
-        super().__init__()
-        self.session = session
-
-    def run(self):
-        try:
-            if not self.session.ensure_connected():
-                self.error.emit("Database connection lost")
-                return
-            result = scan_database(self.session.db, progress_callback=self._on_progress)
-            # Overwrite scan_time with JST
-            result.scan_time = now_jst_str()
-            self.finished.emit(result)
-        except Exception as exc:
-            self.error.emit(str(exc))
-
-    def _on_progress(self, current, total, table_name):
-        self.progress.emit(current, total, table_name)
-
-
-class ScanPage(QWidget):
-    scan_complete = Signal(object)
-
-    def __init__(self, parent=None):
+class ScanPage(ttk.Frame):
+    def __init__(self, parent, main_window):
         super().__init__(parent)
+        self.main_window = main_window
         self._session: SessionManager | None = None
         self.scan_result: DatabaseScanResult | None = None
+        self.on_scan_complete = None  # callback(scan_result)
         self._init_ui()
 
     def set_session(self, session: SessionManager):
         self._session = session
-        self.btn_scan.setEnabled(True)
-
-    # kept for backward compat; redirects to set_session via main_window
-    def set_connection(self, config):
-        pass
+        self._btn_scan.config(state=tk.NORMAL)
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
+        ctrl = ttk.Frame(self)
+        ctrl.pack(fill=tk.X, padx=10, pady=5)
 
-        ctrl = QHBoxLayout()
-        self.btn_scan = QPushButton()
-        self.btn_scan.clicked.connect(self._start_scan)
-        self.btn_scan.setEnabled(False)
-        self.btn_load_cache = QPushButton()
-        self.btn_load_cache.clicked.connect(self._load_cached)
-        self.btn_use = QPushButton()
-        self.btn_use.clicked.connect(self._use_result)
-        self.btn_use.setEnabled(False)
-        self.btn_use.setStyleSheet("font-weight: bold;")
+        self._btn_scan = ttk.Button(ctrl, text=t("scan.btn_scan"), command=self._start_scan, state=tk.DISABLED)
+        self._btn_scan.pack(side=tk.LEFT, padx=3)
+        self._btn_load_cache = ttk.Button(ctrl, text=t("scan.btn_load_cache"), command=self._load_cached)
+        self._btn_load_cache.pack(side=tk.LEFT, padx=3)
+        self._btn_use = ttk.Button(ctrl, text=t("scan.btn_use"), command=self._use_result, state=tk.DISABLED)
+        self._btn_use.pack(side=tk.LEFT, padx=3)
 
-        ctrl.addWidget(self.btn_scan)
-        ctrl.addWidget(self.btn_load_cache)
-        ctrl.addWidget(self.btn_use)
-        ctrl.addStretch()
-        layout.addLayout(ctrl)
+        self._progress_var = tk.DoubleVar()
+        self._progress_bar = ttk.Progressbar(self, variable=self._progress_var, maximum=100)
+        self._progress_bar.pack(fill=tk.X, padx=10, pady=2)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        self.lbl_progress = QLabel("")
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.lbl_progress)
+        self._lbl_progress = ttk.Label(self, text="")
+        self._lbl_progress.pack(fill=tk.X, padx=10)
 
-        self.table = QTableWidget()
-        self.table.setColumnCount(7)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setAlternatingRowColors(True)
-        layout.addWidget(self.table)
-
-        self.retranslate()
-
-    def retranslate(self):
-        self.btn_scan.setText(t("scan.btn_scan"))
-        self.btn_load_cache.setText(t("scan.btn_load_cache"))
-        self.btn_use.setText(t("scan.btn_use"))
+        # Treeview for scan results
+        columns = ("table", "rows", "pk", "unique", "json", "time", "marker")
+        self._tree = ttk.Treeview(self, columns=columns, show="headings", height=20)
         headers = [t("scan.col_table"), t("scan.col_rows"), t("scan.col_pk"),
                    t("scan.col_unique"), t("scan.col_json"), t("scan.col_time"), t("scan.col_marker")]
-        self.table.setHorizontalHeaderLabels(headers)
+        for col, hdr in zip(columns, headers):
+            self._tree.heading(col, text=hdr)
+            self._tree.column(col, width=120)
+        self._tree.column("table", width=200)
+
+        scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self._tree.yview)
+        self._tree.configure(yscrollcommand=scrollbar.set)
+        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=5)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=5)
+
+    def retranslate(self):
+        self._btn_scan.config(text=t("scan.btn_scan"))
+        self._btn_load_cache.config(text=t("scan.btn_load_cache"))
+        self._btn_use.config(text=t("scan.btn_use"))
+        headers = [t("scan.col_table"), t("scan.col_rows"), t("scan.col_pk"),
+                   t("scan.col_unique"), t("scan.col_json"), t("scan.col_time"), t("scan.col_marker")]
+        for col, hdr in zip(("table", "rows", "pk", "unique", "json", "time", "marker"), headers):
+            self._tree.heading(col, text=hdr)
 
     def _start_scan(self):
         if not self._session:
             return
-        self.btn_scan.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
-        self.lbl_progress.setText(t("scan.scanning"))
+        self._btn_scan.config(state=tk.DISABLED)
+        self._lbl_progress.config(text=t("scan.scanning"))
+        self._progress_var.set(0)
 
-        self._thread = QThread()
-        self._worker = ScanWorker(self._session)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.error.connect(self._on_error)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.error.connect(self._thread.quit)
-        self._thread.start()
+        def _worker():
+            try:
+                if not self._session.ensure_connected():
+                    self.after(0, lambda: self._on_error("Database connection lost"))
+                    return
+                result = scan_database(self._session.db, progress_callback=self._on_progress_thread)
+                result.scan_time = now_jst_str()
+                self.after(0, lambda: self._on_finished(result))
+            except Exception as exc:
+                self.after(0, lambda e=str(exc): self._on_error(e))
 
-    def _on_progress(self, c, tot, name):
-        self.progress_bar.setMaximum(tot)
-        self.progress_bar.setValue(c)
-        self.lbl_progress.setText(t("scan.progress", c=c, t=tot, name=name))
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_progress_thread(self, current, total, table_name):
+        # Schedule UI update on main thread
+        self.after(0, lambda c=current, t_=total, n=table_name: self._on_progress(c, t_, n))
+
+    def _on_progress(self, c, total, name):
+        if total > 0:
+            self._progress_var.set(c / total * 100)
+        self._lbl_progress.config(text=t("scan.progress", c=c, t=total, name=name))
 
     def _on_finished(self, result: DatabaseScanResult):
         self.scan_result = result
-        self.btn_scan.setEnabled(True)
-        self.btn_use.setEnabled(True)
-        self.progress_bar.setVisible(False)
-        self.lbl_progress.setText(t("scan.complete", n=len(result.tables), time=result.scan_time))
+        self._btn_scan.config(state=tk.NORMAL)
+        self._btn_use.config(state=tk.NORMAL)
+        self._lbl_progress.config(text=t("scan.complete", n=len(result.tables), time=result.scan_time))
         save_scan_result(result, AppPaths().metadata_cache_dir)
         self._populate_table(result)
 
     def _on_error(self, msg):
-        self.btn_scan.setEnabled(True)
-        self.progress_bar.setVisible(False)
-        self.lbl_progress.setText(f"{t('scan.error')}: {msg}")
-        QMessageBox.critical(self, t("scan.error"), msg)
+        self._btn_scan.config(state=tk.NORMAL)
+        self._lbl_progress.config(text=f"{t('scan.error')}: {msg}")
+        messagebox.showerror(t("scan.error"), msg)
 
     def _load_cached(self):
         paths = AppPaths()
@@ -149,32 +122,33 @@ class ScanPage(QWidget):
         if not db_name:
             cached = list_cached_databases(paths.metadata_cache_dir)
             if not cached:
-                QMessageBox.information(self, t("scan.no_cache"), t("scan.no_cache_msg"))
+                messagebox.showinfo(t("scan.no_cache"), t("scan.no_cache_msg"))
                 return
             db_name = cached[0]
         result = load_scan_result(paths.metadata_cache_dir, db_name)
         if result:
             self.scan_result = result
-            self.btn_use.setEnabled(True)
-            self.lbl_progress.setText(t("scan.loaded_cache", n=len(result.tables), time=result.scan_time))
+            self._btn_use.config(state=tk.NORMAL)
+            self._lbl_progress.config(text=t("scan.loaded_cache", n=len(result.tables), time=result.scan_time))
             self._populate_table(result)
         else:
-            QMessageBox.information(self, t("scan.no_cache"), t("scan.no_cache_msg"))
+            messagebox.showinfo(t("scan.no_cache"), t("scan.no_cache_msg"))
 
     def _use_result(self):
-        if self.scan_result:
-            self.scan_complete.emit(self.scan_result)
+        if self.scan_result and self.on_scan_complete:
+            self.on_scan_complete(self.scan_result)
 
     def _populate_table(self, result: DatabaseScanResult):
-        self.table.setRowCount(0)
+        for item in self._tree.get_children():
+            self._tree.delete(item)
         for name in sorted(result.tables.keys()):
             meta = result.tables[name]
-            r = self.table.rowCount()
-            self.table.insertRow(r)
-            self.table.setItem(r, 0, QTableWidgetItem(name))
-            self.table.setItem(r, 1, QTableWidgetItem(str(meta.row_count)))
-            self.table.setItem(r, 2, QTableWidgetItem(", ".join(meta.primary_key_columns)))
-            self.table.setItem(r, 3, QTableWidgetItem(", ".join(meta.unique_key_columns)))
-            self.table.setItem(r, 4, QTableWidgetItem(", ".join(meta.json_columns)))
-            self.table.setItem(r, 5, QTableWidgetItem(", ".join(meta.time_columns)))
-            self.table.setItem(r, 6, QTableWidgetItem(", ".join(meta.marker_columns)))
+            self._tree.insert("", tk.END, values=(
+                name,
+                str(meta.row_count),
+                ", ".join(meta.primary_key_columns),
+                ", ".join(meta.unique_key_columns),
+                ", ".join(meta.json_columns),
+                ", ".join(meta.time_columns),
+                ", ".join(meta.marker_columns),
+            ))

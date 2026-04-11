@@ -1,7 +1,7 @@
 """
 Timezone utilities.
 
-All timestamps in MySQL Data Factory 2.0 use Asia/Tokyo (JST).
+All timestamps in MySQL Data Factory 3.00 use Asia/Tokyo (JST).
 """
 
 from __future__ import annotations
@@ -46,3 +46,4 @@ def format_jst(dt: datetime | str | None, fmt: str = "%Y-%m-%d %H:%M:%S JST") ->
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=JST)
     return dt.astimezone(JST).strftime(fmt)
+

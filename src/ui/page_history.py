@@ -1,19 +1,14 @@
 """
 Page 6: History & Cleanup — with i18n, enhanced Report columns, and JST timestamps.
+V3.0: tkinter version.
 """
 
 from __future__ import annotations
 
 import json
-
-from PySide6.QtCore import Signal, Qt, QThread, QObject
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView,
-    QGroupBox, QTabWidget, QMessageBox, QLineEdit,
-    QFormLayout, QSplitter, QDialog, QDialogButtonBox,
-    QScrollArea, QFrame,
-)
+import threading
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 from src.config.app_config import AppPaths, ConnectionConfig
 from src.execute.cleanup_runner import (
@@ -26,351 +21,304 @@ from src.ui.i18n import t
 from src.utils.timezone import format_jst
 
 
-class CleanupConfirmDialog(QDialog):
-    """
-    High-safety confirmation dialog for cleanup.
-    Shows ALL tables in the campaign, each with its own PK range,
-    estimated row count, and sample preview.
-
-    table_infos: list of dicts with keys:
-        table_name, pk_column, pk_start, pk_end,
-        estimated_rows, sample_rows (list[dict])
-    """
+class CleanupConfirmDialog(tk.Toplevel):
+    """High-safety confirmation dialog for cleanup."""
 
     def __init__(self, parent, db_name: str, campaign_id: str,
                  table_infos: list[dict]):
         super().__init__(parent)
-        self.setWindowTitle(t("hist.confirm_dialog_title"))
-        self.setMinimumWidth(680)
-        self.setMinimumHeight(540)
+        self.title(t("hist.confirm_dialog_title"))
+        self.geometry("700x560")
+        self.resizable(True, True)
+        self.result = False
+        self.transient(parent)
+        self.grab_set()
 
-        layout = QVBoxLayout(self)
+        # Warning
+        warn = ttk.Label(self, text=t("hist.confirm_warning"),
+                         foreground="red", font=("", 11, "bold"), wraplength=660)
+        warn.pack(padx=10, pady=10)
 
-        # Warning banner
-        warn = QLabel(t("hist.confirm_warning"))
-        warn.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
-        warn.setWordWrap(True)
-        layout.addWidget(warn)
-
-        # Top summary group
+        # Summary
         total_rows = sum(ti.get("estimated_rows", 0) for ti in table_infos)
-        summary_group = QGroupBox(t("hist.confirm_info_group"))
-        form = QFormLayout(summary_group)
-        form.addRow(t("hist.confirm_db"),       QLabel(db_name))
-        form.addRow(t("hist.confirm_campaign"), QLabel(campaign_id))
-        form.addRow(t("hist.confirm_tables_count"),
-                    QLabel(str(len(table_infos))))
-        total_lbl = QLabel(str(total_rows))
-        total_lbl.setStyleSheet("font-weight: bold; color: #cc4400;")
-        form.addRow(t("hist.confirm_total_rows"), total_lbl)
-        layout.addWidget(summary_group)
+        summary = ttk.LabelFrame(self, text=t("hist.confirm_info_group"))
+        summary.pack(fill=tk.X, padx=10, pady=5)
+        for label, value in [
+            (t("hist.confirm_db"), db_name),
+            (t("hist.confirm_campaign"), campaign_id),
+            (t("hist.confirm_tables_count"), str(len(table_infos))),
+            (t("hist.confirm_total_rows"), str(total_rows)),
+        ]:
+            row = ttk.Frame(summary)
+            row.pack(fill=tk.X, padx=5, pady=1)
+            ttk.Label(row, text=label, width=20, anchor=tk.E).pack(side=tk.LEFT)
+            ttk.Label(row, text=value).pack(side=tk.LEFT, padx=5)
 
-        # Scrollable area for per-table blocks
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setSpacing(8)
+        # Per-table details (scrollable)
+        canvas = tk.Canvas(self)
+        scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor=tk.NW)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=5)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
 
         for ti in table_infos:
             est = ti.get("estimated_rows", 0)
-            grp = QGroupBox(
-                f"{ti['table_name']}  "
-                f"({t('hist.confirm_est_rows')} {est:,})"
-            )
-            grp_layout = QVBoxLayout(grp)
+            grp = ttk.LabelFrame(scroll_frame,
+                                 text=f"{ti['table_name']}  ({t('hist.confirm_est_rows')} {est:,})")
+            grp.pack(fill=tk.X, padx=5, pady=3)
 
-            # Per-table metadata
-            meta_form = QFormLayout()
-            meta_form.addRow(t("hist.confirm_pk_col"),   QLabel(ti.get("pk_column", "")))
-            meta_form.addRow(t("hist.confirm_pk_start"), QLabel(str(ti.get("pk_start", ""))))
-            meta_form.addRow(t("hist.confirm_pk_end"),   QLabel(str(ti.get("pk_end", ""))))
-            grp_layout.addLayout(meta_form)
+            for label, value in [
+                (t("hist.confirm_pk_col"), ti.get("pk_column", "")),
+                (t("hist.confirm_pk_start"), str(ti.get("pk_start", ""))),
+                (t("hist.confirm_pk_end"), str(ti.get("pk_end", ""))),
+            ]:
+                row = ttk.Frame(grp)
+                row.pack(fill=tk.X, padx=5, pady=1)
+                ttk.Label(row, text=label, width=16, anchor=tk.E).pack(side=tk.LEFT)
+                ttk.Label(row, text=value).pack(side=tk.LEFT, padx=5)
 
-            # Sample rows
             sample_rows = ti.get("sample_rows", [])
             if sample_rows:
+                ttk.Label(grp, text=t("hist.confirm_sample_group")).pack(anchor=tk.W, padx=5)
                 headers = list(sample_rows[0].keys())
-                tbl = QTableWidget(len(sample_rows), len(headers))
-                tbl.setHorizontalHeaderLabels(headers)
-                tbl.horizontalHeader().setSectionResizeMode(
-                    QHeaderView.ResizeMode.ResizeToContents)
-                tbl.setMaximumHeight(140)
-                tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-                for r, row in enumerate(sample_rows):
-                    for c, h in enumerate(headers):
-                        tbl.setItem(r, c, QTableWidgetItem(str(row.get(h, ""))))
-                grp_layout.addWidget(QLabel(t("hist.confirm_sample_group")))
-                grp_layout.addWidget(tbl)
+                tree = ttk.Treeview(grp, columns=headers, show="headings", height=min(5, len(sample_rows)))
+                for h in headers:
+                    tree.heading(h, text=h)
+                    tree.column(h, width=80)
+                for sr in sample_rows:
+                    tree.insert("", tk.END, values=[str(sr.get(h, "")) for h in headers])
+                tree.pack(fill=tk.X, padx=5, pady=2)
             else:
-                grp_layout.addWidget(QLabel(t("hist.confirm_no_sample")))
-
-            scroll_layout.addWidget(grp)
-
-        scroll_layout.addStretch()
-        scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll)
+                ttk.Label(grp, text=t("hist.confirm_no_sample")).pack(padx=5)
 
         # Buttons
-        btns = QDialogButtonBox()
-        self._confirm_btn = QPushButton(t("hist.confirm_delete_btn"))
-        self._confirm_btn.setStyleSheet(
-            "background-color: #cc0000; color: white; font-weight: bold; padding: 4px 16px;")
-        cancel_btn = QPushButton(t("hist.confirm_cancel_btn"))
-        btns.addButton(self._confirm_btn, QDialogButtonBox.ButtonRole.AcceptRole)
-        btns.addButton(cancel_btn, QDialogButtonBox.ButtonRole.RejectRole)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Button(btn_frame, text=t("hist.confirm_cancel_btn"),
+                   command=self._cancel).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text=t("hist.confirm_delete_btn"),
+                   command=self._confirm).pack(side=tk.RIGHT, padx=5)
+
+    def _confirm(self):
+        self.result = True
+        self.destroy()
+
+    def _cancel(self):
+        self.result = False
+        self.destroy()
+
+    def show(self) -> bool:
+        self.wait_window()
+        return self.result
 
 
-class CleanupWorker(QObject):
-    """Worker for background cleanup execution."""
-    progress = Signal(int, int, str, int)
-    finished = Signal(object)  # CleanupReport
-    error = Signal(str)
-
-    def __init__(self, conn_config: ConnectionConfig, plan: CleanupPlan, dry_run: bool):
-        super().__init__()
-        self.conn_config = conn_config
-        self.plan = plan
-        self.dry_run = dry_run
-
-    def run(self):
-        try:
-            report = execute_cleanup(
-                self.conn_config, self.plan, self.dry_run,
-                progress_callback=self._on_progress,
-            )
-            self.finished.emit(report)
-        except Exception as exc:
-            self.error.emit(str(exc))
-
-    def _on_progress(self, current, total, table_name, count):
-        self.progress.emit(current, total, table_name, count)
-
-class HistoryPage(QWidget):
-    def __init__(self, parent=None):
+class HistoryPage(ttk.Frame):
+    def __init__(self, parent, main_window):
         super().__init__(parent)
+        self.main_window = main_window
         self.paths = AppPaths()
         self._init_ui()
-
-    def _init_ui(self):
-        layout = QVBoxLayout(self)
-        splitter = QSplitter(Qt.Orientation.Vertical)
-
-        # ── Top: tabbed history browser ──
-        history_tabs = QTabWidget()
-        self.history_tabs = history_tabs
-
-        # Plans tab
-        plans_widget = QWidget()
-        plans_layout = QVBoxLayout(plans_widget)
-        self.plans_table = QTableWidget()
-        self.plans_table.setColumnCount(4)
-        self.plans_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.plans_table.cellClicked.connect(self._on_plan_clicked)
-        self.plans_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        plans_layout.addWidget(self.plans_table)
-        history_tabs.addTab(plans_widget, "")
-
-        # Reports tab — enhanced columns
-        reports_widget = QWidget()
-        reports_layout = QVBoxLayout(reports_widget)
-        self.reports_table = QTableWidget()
-        self.reports_table.setColumnCount(11)
-        self.reports_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.reports_table.cellClicked.connect(self._on_report_clicked)
-        self.reports_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        reports_layout.addWidget(self.reports_table)
-        history_tabs.addTab(reports_widget, "")
-
-        # Cleanup SQL tab
-        cleanup_widget = QWidget()
-        cleanup_layout = QVBoxLayout(cleanup_widget)
-        self.cleanup_table = QTableWidget()
-        self.cleanup_table.setColumnCount(2)
-        self.cleanup_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.cleanup_table.cellClicked.connect(self._on_cleanup_sql_clicked)
-        self.cleanup_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        cleanup_layout.addWidget(self.cleanup_table)
-        history_tabs.addTab(cleanup_widget, "")
-
-        splitter.addWidget(history_tabs)
-
-        # ── Bottom: detail view + cleanup controls ──
-        bottom = QWidget()
-        bottom_layout = QVBoxLayout(bottom)
-
-        # Detail viewer
-        self.detail_group = QGroupBox()
-        detail_layout = QVBoxLayout()
-        self.detail_text = QTextEdit()
-        self.detail_text.setReadOnly(True)
-        self.detail_text.setMaximumHeight(180)
-        detail_layout.addWidget(self.detail_text)
-        self.detail_group.setLayout(detail_layout)
-        bottom_layout.addWidget(self.detail_group)
-
-        # Cleanup controls
-        self.cleanup_group = QGroupBox()
-        cleanup_ctrl_layout = QFormLayout()
-        self.cleanup_campaign_input = QLineEdit()
-        self.cleanup_campaign_input.setPlaceholderText("campaign_id")
-        self.lbl_campaign_id = QLabel()
-        cleanup_ctrl_layout.addRow(self.lbl_campaign_id, self.cleanup_campaign_input)
-        self.cleanup_group.setLayout(cleanup_ctrl_layout)
-        bottom_layout.addWidget(self.cleanup_group)
-
-        btn_row = QHBoxLayout()
-        self.btn_refresh = QPushButton()
-        self.btn_refresh.clicked.connect(self.refresh)
-        self.btn_dry_run = QPushButton()
-        self.btn_dry_run.clicked.connect(lambda: self._run_cleanup(dry_run=True))
-        self.btn_execute_cleanup = QPushButton()
-        self.btn_execute_cleanup.setStyleSheet("color: red; font-weight: bold;")
-        self.btn_execute_cleanup.clicked.connect(lambda: self._run_cleanup(dry_run=False))
-        btn_row.addWidget(self.btn_refresh)
-        btn_row.addWidget(self.btn_dry_run)
-        btn_row.addWidget(self.btn_execute_cleanup)
-        btn_row.addStretch()
-        bottom_layout.addLayout(btn_row)
-
-        splitter.addWidget(bottom)
-        layout.addWidget(splitter)
-
-        self.retranslate()
         self.refresh()
 
+    def _init_ui(self):
+        paned = ttk.PanedWindow(self, orient=tk.VERTICAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # ── Top: tabbed history browser ──
+        self._history_notebook = ttk.Notebook(paned)
+
+        # Plans tab
+        plans_frame = ttk.Frame(self._history_notebook)
+        self._plans_tree = self._make_tree(plans_frame, ("campaign", "db", "status", "time"))
+        self._plans_tree.bind("<<TreeviewSelect>>", self._on_plan_clicked)
+        self._history_notebook.add(plans_frame, text=t("hist.plans_tab"))
+
+        # Reports tab
+        reports_frame = ttk.Frame(self._history_notebook)
+        report_cols = ("time", "db", "table", "mode", "rows", "pk_col", "pk_start", "pk_end",
+                       "campaign", "report", "cleanup")
+        self._reports_tree = self._make_tree(reports_frame, report_cols)
+        self._reports_tree.bind("<<TreeviewSelect>>", self._on_report_clicked)
+        self._history_notebook.add(reports_frame, text=t("hist.reports_tab"))
+        # Store path data per report row
+        self._report_data: dict[str, dict] = {}
+
+        # Cleanup SQL tab
+        cleanup_frame = ttk.Frame(self._history_notebook)
+        self._cleanup_tree = self._make_tree(cleanup_frame, ("campaign", "file"))
+        self._cleanup_tree.bind("<<TreeviewSelect>>", self._on_cleanup_sql_clicked)
+        self._history_notebook.add(cleanup_frame, text=t("hist.cleanup_tab"))
+
+        paned.add(self._history_notebook, weight=2)
+
+        # ── Bottom: detail + cleanup ──
+        bottom = ttk.Frame(paned)
+
+        detail_frame = ttk.LabelFrame(bottom, text=t("hist.detail"))
+        detail_frame.pack(fill=tk.BOTH, expand=True, pady=3)
+        self._detail_frame = detail_frame
+        self._detail_text = tk.Text(detail_frame, height=8, state=tk.DISABLED, wrap=tk.WORD)
+        self._detail_text.pack(fill=tk.BOTH, expand=True)
+
+        cleanup_frame2 = ttk.LabelFrame(bottom, text=t("hist.cleanup_ops"))
+        cleanup_frame2.pack(fill=tk.X, pady=3)
+        self._cleanup_frame = cleanup_frame2
+
+        row = ttk.Frame(cleanup_frame2)
+        row.pack(fill=tk.X, padx=5, pady=5)
+        self._lbl_campaign_id = ttk.Label(row, text=t("hist.campaign_id"))
+        self._lbl_campaign_id.pack(side=tk.LEFT)
+        self._campaign_var = tk.StringVar()
+        ttk.Entry(row, textvariable=self._campaign_var, width=30).pack(side=tk.LEFT, padx=5)
+
+        btn_row = ttk.Frame(cleanup_frame2)
+        btn_row.pack(fill=tk.X, padx=5, pady=3)
+        self._btn_refresh = ttk.Button(btn_row, text=t("hist.refresh"), command=self.refresh)
+        self._btn_refresh.pack(side=tk.LEFT, padx=3)
+        self._btn_dry_run = ttk.Button(btn_row, text=t("hist.dry_run"),
+                                        command=lambda: self._run_cleanup(dry_run=True))
+        self._btn_dry_run.pack(side=tk.LEFT, padx=3)
+        self._btn_execute_cleanup = ttk.Button(btn_row, text=t("hist.execute_cleanup"),
+                                                command=lambda: self._run_cleanup(dry_run=False))
+        self._btn_execute_cleanup.pack(side=tk.LEFT, padx=3)
+
+        paned.add(bottom, weight=1)
+
+    def _make_tree(self, parent, columns) -> ttk.Treeview:
+        tree = ttk.Treeview(parent, columns=columns, show="headings", height=8)
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=100)
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        return tree
+
     def retranslate(self):
-        self.history_tabs.setTabText(0, t("hist.plans_tab"))
-        self.history_tabs.setTabText(1, t("hist.reports_tab"))
-        self.history_tabs.setTabText(2, t("hist.cleanup_tab"))
-        self.detail_group.setTitle(t("hist.detail"))
-        self.cleanup_group.setTitle(t("hist.cleanup_ops"))
-        self.lbl_campaign_id.setText(t("hist.campaign_id"))
-        self.btn_refresh.setText(t("hist.refresh"))
-        self.btn_dry_run.setText(t("hist.dry_run"))
-        self.btn_execute_cleanup.setText(t("hist.execute_cleanup"))
-        # Plans table headers
-        self.plans_table.setHorizontalHeaderLabels([
-            t("hist.col_campaign"), t("hist.col_db"),
-            t("hist.col_status"), t("hist.col_time"),
-        ])
-        # Reports table headers — 11 cols
-        self.reports_table.setHorizontalHeaderLabels([
-            t("hist.col_time"), t("hist.col_db"), t("hist.col_table"),
-            t("hist.col_mode"), t("hist.col_rows"),
-            t("hist.col_pk_col"), t("hist.col_pk_start"), t("hist.col_pk_end"),
-            t("hist.col_campaign"), t("hist.col_report"), t("hist.col_cleanup"),
-        ])
-        # Cleanup SQL table headers
-        self.cleanup_table.setHorizontalHeaderLabels([
-            t("hist.col_campaign"), "File",
-        ])
+        self._history_notebook.tab(0, text=t("hist.plans_tab"))
+        self._history_notebook.tab(1, text=t("hist.reports_tab"))
+        self._history_notebook.tab(2, text=t("hist.cleanup_tab"))
+        self._detail_frame.config(text=t("hist.detail"))
+        self._cleanup_frame.config(text=t("hist.cleanup_ops"))
+        self._lbl_campaign_id.config(text=t("hist.campaign_id"))
+        self._btn_refresh.config(text=t("hist.refresh"))
+        self._btn_dry_run.config(text=t("hist.dry_run"))
+        self._btn_execute_cleanup.config(text=t("hist.execute_cleanup"))
+
+        plan_hdrs = [t("hist.col_campaign"), t("hist.col_db"), t("hist.col_status"), t("hist.col_time")]
+        for col, hdr in zip(("campaign", "db", "status", "time"), plan_hdrs):
+            self._plans_tree.heading(col, text=hdr)
+
+        report_cols = ("time", "db", "table", "mode", "rows", "pk_col", "pk_start", "pk_end",
+                       "campaign", "report", "cleanup")
+        report_hdrs = [t("hist.col_time"), t("hist.col_db"), t("hist.col_table"),
+                       t("hist.col_mode"), t("hist.col_rows"),
+                       t("hist.col_pk_col"), t("hist.col_pk_start"), t("hist.col_pk_end"),
+                       t("hist.col_campaign"), t("hist.col_report"), t("hist.col_cleanup")]
+        for col, hdr in zip(report_cols, report_hdrs):
+            self._reports_tree.heading(col, text=hdr)
+
+        for col, hdr in zip(("campaign", "file"), [t("hist.col_campaign"), "File"]):
+            self._cleanup_tree.heading(col, text=hdr)
 
     def refresh(self):
         self._populate_plans()
         self._populate_reports()
         self._populate_cleanup_sql()
 
-    def _make_item(self, text: str) -> QTableWidgetItem:
-        item = QTableWidgetItem(str(text))
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        return item
-
     def _populate_plans(self):
-        self.plans_table.setRowCount(0)
+        for item in self._plans_tree.get_children():
+            self._plans_tree.delete(item)
         for entry in list_plans(self.paths.plans_dir):
-            row = self.plans_table.rowCount()
-            self.plans_table.insertRow(row)
-            self.plans_table.setItem(row, 0, self._make_item(entry.campaign_id))
-            self.plans_table.setItem(row, 1, self._make_item(entry.db_name))
-            self.plans_table.setItem(row, 2, self._make_item(entry.status))
-            self.plans_table.setItem(row, 3, self._make_item(format_jst(entry.created_at)))
+            self._plans_tree.insert("", tk.END, values=(
+                entry.campaign_id, entry.db_name, entry.status, format_jst(entry.created_at)))
 
     def _populate_reports(self):
-        self.reports_table.setRowCount(0)
+        for item in self._reports_tree.get_children():
+            self._reports_tree.delete(item)
+        self._report_data.clear()
         for entry in list_reports(self.paths.reports_dir, self.paths.cleanup_sql_dir):
-            row = self.reports_table.rowCount()
-            self.reports_table.insertRow(row)
             rows_str = f"{entry.rows_inserted}/{entry.rows_attempted}"
             cleanup_label = "YES" if entry.cleanup_sql_path else "-"
             report_label = entry.report_path.split("/")[-1].split("\\")[-1] if entry.report_path else "-"
-            self.reports_table.setItem(row, 0, self._make_item(format_jst(entry.created_at)))
-            self.reports_table.setItem(row, 1, self._make_item(entry.db_name))
-            self.reports_table.setItem(row, 2, self._make_item(entry.table_name))
-            self.reports_table.setItem(row, 3, self._make_item(entry.mode or "insert"))
-            self.reports_table.setItem(row, 4, self._make_item(rows_str))
-            self.reports_table.setItem(row, 5, self._make_item(entry.pk_columns))
-            self.reports_table.setItem(row, 6, self._make_item(entry.pk_start))
-            self.reports_table.setItem(row, 7, self._make_item(entry.pk_end))
-            self.reports_table.setItem(row, 8, self._make_item(entry.campaign_id))
-            self.reports_table.setItem(row, 9, self._make_item(report_label))
-            self.reports_table.setItem(row, 10, self._make_item(cleanup_label))
-            # Store full paths in hidden data
-            self.reports_table.item(row, 9).setData(Qt.ItemDataRole.UserRole, entry.report_path)
-            self.reports_table.item(row, 10).setData(Qt.ItemDataRole.UserRole, entry.cleanup_sql_path)
+            iid = self._reports_tree.insert("", tk.END, values=(
+                format_jst(entry.created_at), entry.db_name, entry.table_name,
+                entry.mode or "insert", rows_str,
+                entry.pk_columns, entry.pk_start, entry.pk_end,
+                entry.campaign_id, report_label, cleanup_label))
+            self._report_data[iid] = {
+                "report_path": entry.report_path,
+                "cleanup_sql_path": entry.cleanup_sql_path,
+                "campaign_id": entry.campaign_id,
+            }
 
     def _populate_cleanup_sql(self):
-        self.cleanup_table.setRowCount(0)
+        for item in self._cleanup_tree.get_children():
+            self._cleanup_tree.delete(item)
         for entry in list_cleanup_sql(self.paths.cleanup_sql_dir):
-            row = self.cleanup_table.rowCount()
-            self.cleanup_table.insertRow(row)
-            self.cleanup_table.setItem(row, 0, self._make_item(entry.campaign_id))
-            self.cleanup_table.setItem(row, 1, self._make_item(entry.summary))
+            self._cleanup_tree.insert("", tk.END, values=(entry.campaign_id, entry.summary))
 
-    def _on_plan_clicked(self, row, col):
-        item = self.plans_table.item(row, 0)
-        if item:
-            campaign_id = item.text()
-            plan_path = self.paths.plans_dir / f"campaign_{campaign_id}.json"
-            if plan_path.exists():
-                data = load_report(plan_path)
-                self.detail_text.setPlainText(
-                    json.dumps(data, indent=2, ensure_ascii=False, default=str)
-                )
-                self.cleanup_campaign_input.setText(campaign_id)
+    def _set_detail(self, text: str):
+        self._detail_text.config(state=tk.NORMAL)
+        self._detail_text.delete("1.0", tk.END)
+        self._detail_text.insert(tk.END, text)
+        self._detail_text.config(state=tk.DISABLED)
 
-    def _on_report_clicked(self, row, col):
-        report_item = self.reports_table.item(row, 9)
-        cid_item = self.reports_table.item(row, 8)
-        if report_item:
-            report_path = report_item.data(Qt.ItemDataRole.UserRole) or ""
-            cleanup_path = ""
-            cleanup_item = self.reports_table.item(row, 10)
-            if cleanup_item:
-                cleanup_path = cleanup_item.data(Qt.ItemDataRole.UserRole) or ""
-            from pathlib import Path
-            if report_path and Path(report_path).exists():
-                data = load_report(Path(report_path))
-                # Build readable summary
-                lines = [json.dumps(data, indent=2, ensure_ascii=False, default=str)]
-                if cleanup_path:
-                    lines.append(f"\n--- Cleanup SQL path ---\n{cleanup_path}")
-                self.detail_text.setPlainText("\n".join(lines))
-            if cid_item:
-                self.cleanup_campaign_input.setText(cid_item.text())
+    def _on_plan_clicked(self, event=None):
+        sel = self._plans_tree.selection()
+        if not sel:
+            return
+        vals = self._plans_tree.item(sel[0], "values")
+        campaign_id = vals[0]
+        plan_path = self.paths.plans_dir / f"campaign_{campaign_id}.json"
+        if plan_path.exists():
+            data = load_report(plan_path)
+            self._set_detail(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+            self._campaign_var.set(campaign_id)
 
-    def _on_cleanup_sql_clicked(self, row, col):
-        item = self.cleanup_table.item(row, 0)
-        if item:
-            cid = item.text()
-            sql_path = self.paths.cleanup_sql_dir / f"cleanup_{cid}.sql"
-            if sql_path.exists():
-                self.detail_text.setPlainText(sql_path.read_text(encoding="utf-8"))
-                self.cleanup_campaign_input.setText(cid)
+    def _on_report_clicked(self, event=None):
+        sel = self._reports_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        meta = self._report_data.get(iid, {})
+        report_path = meta.get("report_path", "")
+        cleanup_path = meta.get("cleanup_sql_path", "")
+        campaign_id = meta.get("campaign_id", "")
+        from pathlib import Path
+        if report_path and Path(report_path).exists():
+            data = load_report(Path(report_path))
+            lines = [json.dumps(data, indent=2, ensure_ascii=False, default=str)]
+            if cleanup_path:
+                lines.append(f"\n--- Cleanup SQL path ---\n{cleanup_path}")
+            self._set_detail("\n".join(lines))
+        if campaign_id:
+            self._campaign_var.set(campaign_id)
+
+    def _on_cleanup_sql_clicked(self, event=None):
+        sel = self._cleanup_tree.selection()
+        if not sel:
+            return
+        vals = self._cleanup_tree.item(sel[0], "values")
+        cid = vals[0]
+        sql_path = self.paths.cleanup_sql_dir / f"cleanup_{cid}.sql"
+        if sql_path.exists():
+            self._set_detail(sql_path.read_text(encoding="utf-8"))
+            self._campaign_var.set(cid)
 
     def _run_cleanup(self, dry_run: bool):
-        campaign_id = self.cleanup_campaign_input.text().strip()
+        campaign_id = self._campaign_var.get().strip()
         if not campaign_id:
-            QMessageBox.warning(self, t("common.warning"), t("hist.no_campaign"))
+            messagebox.showwarning(t("common.warning"), t("hist.no_campaign"))
             return
 
         sql_path = self.paths.cleanup_sql_dir / f"cleanup_{campaign_id}.sql"
         if not sql_path.exists():
-            QMessageBox.warning(self, t("common.warning"),
-                                t("hist.no_sql", cid=campaign_id))
+            messagebox.showwarning(t("common.warning"), t("hist.no_sql", cid=campaign_id))
             return
 
         plan = CleanupPlan(campaign_id=campaign_id)
@@ -380,35 +328,30 @@ class HistoryPage(QWidget):
             table_name = data.get("table_name", "")
             pk_start = data.get("pk_range_start", "")
             pk_end = data.get("pk_range_end", "")
-            # Fix: read pk_column from report's pk_columns list
             pk_cols = data.get("pk_columns", [])
             pk_column = pk_cols[0] if pk_cols else ""
             if table_name and pk_start and pk_end and pk_column:
                 plan.add_target(CleanupTarget(
-                    table_name=table_name,
-                    pk_column=pk_column,
-                    pk_range_start=pk_start,
-                    pk_range_end=pk_end,
+                    table_name=table_name, pk_column=pk_column,
+                    pk_range_start=pk_start, pk_range_end=pk_end,
                     campaign_id=campaign_id,
                 ))
                 report_data_list.append(data)
 
         if not plan.targets:
-            QMessageBox.warning(self, t("common.warning"), t("hist.no_targets"))
+            messagebox.showwarning(t("common.warning"), t("hist.no_targets"))
             return
 
-        # Get connection from session
-        mw = self.window()
-        conn_config: ConnectionConfig | None = getattr(mw, "conn_config", None)
+        conn_config: ConnectionConfig | None = self.main_window.conn_config
         if conn_config is None:
-            QMessageBox.warning(self, t("common.warning"), t("hist.no_conn"))
+            messagebox.showwarning(t("common.warning"), t("hist.no_conn"))
             return
 
-        # Build per-table info list (query DB for estimates + samples)
         db_name = conn_config.database
         if report_data_list:
             db_name = report_data_list[0].get("db_name", db_name) or db_name
 
+        # Build per-table info
         table_infos = []
         from src.db.connection import DatabaseManager
         _db = DatabaseManager(config=conn_config)
@@ -427,12 +370,10 @@ class HistoryPage(QWidget):
                     try:
                         where = target.build_where_clause()
                         count_rows = _db.query(
-                            f"SELECT COUNT(*) FROM `{target.table_name}` WHERE {where}"
-                        )
+                            f"SELECT COUNT(*) FROM `{target.table_name}` WHERE {where}")
                         ti["estimated_rows"] = int(count_rows[0][0]) if count_rows else 0
                         ti["sample_rows"] = _db.query_dicts(
-                            f"SELECT * FROM `{target.table_name}` WHERE {where} LIMIT 5"
-                        )
+                            f"SELECT * FROM `{target.table_name}` WHERE {where} LIMIT 5")
                     except Exception:
                         pass
                 table_infos.append(ti)
@@ -440,32 +381,26 @@ class HistoryPage(QWidget):
             if db_connected:
                 _db.disconnect()
 
-        # For non-dry-run: show high-safety confirmation dialog with ALL tables
+        # Confirmation dialog for non-dry-run
         if not dry_run:
-            dlg = CleanupConfirmDialog(
-                self,
-                db_name=db_name,
-                campaign_id=campaign_id,
-                table_infos=table_infos,
-            )
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            dlg = CleanupConfirmDialog(self, db_name=db_name,
+                                        campaign_id=campaign_id, table_infos=table_infos)
+            if not dlg.show():
                 return
 
-        self.cleanup_thread = QThread()
-        self.cleanup_worker = CleanupWorker(conn_config, plan, dry_run)
-        self.cleanup_worker.moveToThread(self.cleanup_thread)
-        self.cleanup_thread.started.connect(self.cleanup_worker.run)
-        self.cleanup_worker.finished.connect(self._on_cleanup_finished)
-        self.cleanup_worker.error.connect(self._on_cleanup_error)
-        self.cleanup_worker.finished.connect(self.cleanup_thread.quit)
-        self.cleanup_worker.error.connect(self.cleanup_thread.quit)
-        self.cleanup_thread.start()
+        def _worker():
+            try:
+                report = execute_cleanup(conn_config, plan, dry_run)
+                self.after(0, lambda: self._on_cleanup_finished(report))
+            except Exception as exc:
+                self.after(0, lambda e=str(exc): self._on_cleanup_error(e))
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _on_cleanup_finished(self, report: CleanupReport):
         report.save(self.paths.reports_dir)
-        self.detail_text.setPlainText(report.to_json())
+        self._set_detail(report.to_json())
         mode = "DRY-RUN" if report.dry_run else "EXECUTED"
-        # Build per-table breakdown for result message
         lines = [f"[{mode}] Campaign: {report.campaign_id}\n"]
         for d in report.details:
             tname = d.get("table_name", "?")
@@ -474,14 +409,8 @@ class HistoryPage(QWidget):
             status = "OK" if ok else f"ERROR: {d.get('error', '')}"
             lines.append(f"  {tname}: {rows:,} rows  [{status}]")
         lines.append(f"\nTotal deleted: {report.total_rows_deleted:,} rows")
-        QMessageBox.information(
-            self, t("common.info"), "\n".join(lines)
-        )
+        messagebox.showinfo(t("common.info"), "\n".join(lines))
         self.refresh()
 
     def _on_cleanup_error(self, error_msg: str):
-        QMessageBox.critical(self, t("common.error"), error_msg)
-
-
-
-
+        messagebox.showerror(t("common.error"), error_msg)

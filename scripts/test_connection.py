@@ -48,7 +48,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # 为了保证脚本在任何位置被调用时都能正确导入 src 下的模块，
 # 这里把项目根目录加入 sys.path。
 # 例如后面要导入：
-#   from src.database import DatabaseManager
+#   from src.db.connection import DatabaseManager
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -212,14 +212,17 @@ def main() -> int:
     # 解析命令行参数
     args = parse_args()
 
-    # 延迟导入 DatabaseManager
+    # 延迟导入当前 3.0 配置/连接层
     # 这样用户只看 --help 时，不会过早触发数据库模块依赖
-    from src.database import DatabaseManager
+    from src.config.app_config import ConnectionConfig, load_dotenv_file
+    from src.db.connection import DatabaseManager
+
+    # 先按 3.0 方式加载 env，再构造连接配置
+    load_dotenv_file(args.env_file)
+    conn = ConnectionConfig.from_env()
 
     # 创建数据库管理对象
-    # 连接信息（host/port/database/user/password）通常来自 env 文件
-    db = DatabaseManager()
-
+    db = DatabaseManager(config=conn)
     # 先把当前目标打印出来，方便操作者确认自己连的是哪个库
     # 这一步非常有用，尤其是在堡垒机上容易连错环境时
     print(f"Host: {db.host}")
@@ -275,3 +278,4 @@ def main() -> int:
 # 只有当这个文件被直接运行时，才会执行 main()
 if __name__ == "__main__":
     sys.exit(main())
+

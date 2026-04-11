@@ -165,118 +165,143 @@ def insert_chunk_files(
         chunk_files=[str(f) for f in chunk_files],
     )
 
-    # Read all chunk files
-    all_rows: list[dict[str, str]] = []
+    # ── Stream chunks one-by-one to avoid loading all data into memory ──
+    # First pass: read fieldnames from the first chunk and count total rows
     fieldnames: list[str] = []
+    total_rows_count = 0
     for cf in chunk_files:
         fn, rows = read_chunk_csv(cf)
         if not fieldnames:
             fieldnames = fn
-        all_rows.extend(rows)
+        total_rows_count += len(rows)
 
-    report.total_rows_attempted = len(all_rows)
+    report.total_rows_attempted = total_rows_count
 
-    if not all_rows:
+    if total_rows_count == 0:
         report.status = "completed"
         report.end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return report
 
-    # Track PK range
-    pk_values = []
+    # Track PK range (first and last value only — no list accumulation)
+    pk_first: str = ""
+    pk_last: str = ""
 
     # Build SQL
     columns_sql = ", ".join(f"`{c}`" for c in fieldnames)
     placeholders = ", ".join(["%s"] * len(fieldnames))
     insert_sql = f"INSERT INTO `{table_name}` ({columns_sql}) VALUES ({placeholders})"
 
-    # Process in batches
+    # Process chunk files one at a time (streaming)
     batch_size = batch_config.batch_size
-    total_batches = (len(all_rows) + batch_size - 1) // batch_size
+    # Estimate total batches for progress reporting
+    total_batches = 0
+    for cf in chunk_files:
+        # Each chunk file may produce multiple batches
+        fn, rows = read_chunk_csv(cf)
+        total_batches += max(1, (len(rows) + batch_size - 1) // batch_size)
+
     report.total_batches = total_batches
     error_count = 0
+    global_batch_idx = 0
+    stop_flag = False
 
-    for batch_idx in range(total_batches):
-        start = batch_idx * batch_size
-        end = min(start + batch_size, len(all_rows))
-        batch_rows = all_rows[start:end]
+    for cf in chunk_files:
+        if stop_flag:
+            break
 
-        batch_result = BatchResult(
-            batch_index=batch_idx + 1,
-            rows_attempted=len(batch_rows),
-        )
-
-        if batch_config.dry_run:
-            # Validate only
-            batch_result.rows_inserted = len(batch_rows)
-            batch_result.success = True
-            report.batch_results.append(batch_result)
-            report.total_rows_inserted += len(batch_rows)
-            if progress_callback:
-                progress_callback(batch_idx + 1, total_batches, len(batch_rows), report.total_rows_inserted)
+        # Read one chunk file at a time — memory only holds one chunk
+        _, chunk_rows = read_chunk_csv(cf)
+        if not chunk_rows:
             continue
 
-        # Prepare params
-        params_list = []
-        for row in batch_rows:
-            params = tuple(
-                _normalize_value(row.get(col, ""), col, json_columns)
-                for col in fieldnames
+        # Split chunk into batches
+        for batch_start in range(0, len(chunk_rows), batch_size):
+            if stop_flag:
+                break
+
+            batch_rows = chunk_rows[batch_start:batch_start + batch_size]
+            global_batch_idx += 1
+
+            batch_result = BatchResult(
+                batch_index=global_batch_idx,
+                rows_attempted=len(batch_rows),
             )
-            params_list.append(params)
-            # Track first column as PK approximation
-            if fieldnames:
-                pk_values.append(row.get(fieldnames[0], ""))
 
-        # Insert — use shared connection if provided, else short-lived per batch
-        _shared = db is not None
-        retry_count = 0
-        max_retries = 0 if _shared else 1
-        while retry_count <= max_retries:
-            _db = db if _shared else DatabaseManager(config=conn_config)
-            try:
-                if not _shared and not _db.connect():
-                    raise RuntimeError("Failed to connect to database")
-                affected = _db.executemany(insert_sql, params_list)
-                batch_result.rows_inserted = affected
+            if batch_config.dry_run:
+                batch_result.rows_inserted = len(batch_rows)
                 batch_result.success = True
-                report.total_rows_inserted += affected
-                break
-            except Exception as exc:
-                if not _shared and retry_count < max_retries and _is_retryable_error(exc):
-                    retry_count += 1
-                    logger.warning(f"Batch {batch_idx+1} connection error, retrying... ({exc})")
-                    time.sleep(1)
-                    continue
-                batch_result.success = False
-                batch_result.error_message = str(exc)
-                error_count += 1
-                logger.error(f"Batch {batch_idx+1} failed: {exc}")
-                break
-            finally:
-                if not _shared:
-                    _db.disconnect()
+                report.batch_results.append(batch_result)
+                report.total_rows_inserted += len(batch_rows)
+                if progress_callback:
+                    progress_callback(global_batch_idx, total_batches, len(batch_rows), report.total_rows_inserted)
+                continue
 
-        report.batch_results.append(batch_result)
+            # Prepare params
+            params_list = []
+            for row in batch_rows:
+                params = tuple(
+                    _normalize_value(row.get(col, ""), col, json_columns)
+                    for col in fieldnames
+                )
+                params_list.append(params)
 
-        if progress_callback:
-            progress_callback(batch_idx + 1, total_batches,
-                              batch_result.rows_inserted, report.total_rows_inserted)
+            # Track PK range (first and last only)
+            if fieldnames:
+                if not pk_first:
+                    pk_first = batch_rows[0].get(fieldnames[0], "")
+                pk_last = batch_rows[-1].get(fieldnames[0], "")
 
-        if not batch_result.success and batch_config.stop_on_error:
-            report.error_summary = f"Stopped at batch {batch_idx+1}: {batch_result.error_message}"
-            break
+            # Insert — use shared connection if provided, else short-lived per batch
+            _shared = db is not None
+            retry_count = 0
+            max_retries = 0 if _shared else 1
+            while retry_count <= max_retries:
+                _db = db if _shared else DatabaseManager(config=conn_config)
+                try:
+                    if not _shared and not _db.connect():
+                        raise RuntimeError("Failed to connect to database")
+                    affected = _db.executemany(insert_sql, params_list)
+                    batch_result.rows_inserted = affected
+                    batch_result.success = True
+                    report.total_rows_inserted += affected
+                    break
+                except Exception as exc:
+                    if not _shared and retry_count < max_retries and _is_retryable_error(exc):
+                        retry_count += 1
+                        logger.warning(f"Batch {global_batch_idx} connection error, retrying... ({exc})")
+                        time.sleep(1)
+                        continue
+                    batch_result.success = False
+                    batch_result.error_message = str(exc)
+                    error_count += 1
+                    logger.error(f"Batch {global_batch_idx} failed: {exc}")
+                    break
+                finally:
+                    if not _shared:
+                        _db.disconnect()
 
-        if error_count >= batch_config.max_errors:
-            report.error_summary = f"Max errors ({batch_config.max_errors}) reached"
-            break
+            report.batch_results.append(batch_result)
 
-        if batch_config.throttle_ms > 0:
-            time.sleep(batch_config.throttle_ms / 1000.0)
+            if progress_callback:
+                progress_callback(global_batch_idx, total_batches,
+                                  batch_result.rows_inserted, report.total_rows_inserted)
+
+            if not batch_result.success and batch_config.stop_on_error:
+                report.error_summary = f"Stopped at batch {global_batch_idx}: {batch_result.error_message}"
+                stop_flag = True
+
+            if error_count >= batch_config.max_errors:
+                report.error_summary = f"Max errors ({batch_config.max_errors}) reached"
+                stop_flag = True
+
+            if batch_config.throttle_ms > 0:
+                time.sleep(batch_config.throttle_ms / 1000.0)
 
     # PK range
-    if pk_values:
-        report.pk_range_start = pk_values[0]
-        report.pk_range_end = pk_values[-1]
+    if pk_first:
+        report.pk_range_start = pk_first
+    if pk_last:
+        report.pk_range_end = pk_last
 
     report.failed_batches = sum(1 for b in report.batch_results if not b.success)
     report.status = "completed" if report.failed_batches == 0 else "failed"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-full_mock_db_test.py — MySQL Data Factory 2.0 本地全库压力验证
+full_mock_db_test.py — MySQL Data Factory 3.00 本地全库压力验证
 
 目标：
   Phase 1  连接 cloverit_mock 并确认表结构
@@ -834,3 +834,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
