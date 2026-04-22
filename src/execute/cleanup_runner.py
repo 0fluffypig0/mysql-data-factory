@@ -37,18 +37,35 @@ class CleanupTarget:
     custom_where: str = ""
     campaign_id: str = ""
 
-    def build_where_clause(self) -> str:
-        """Build the WHERE clause for deletion."""
+    def build_where_clause(self, dialect: str = "mysql") -> str:
+        """
+        Build the WHERE clause for deletion.
+
+        `dialect` picks the identifier quote style: MySQL uses backticks,
+        SQLite / other SQL dialects use ANSI double-quotes. Kept as a
+        positional arg with a safe default so existing callers don't break.
+        """
+        def q(name: str) -> str:
+            if (dialect or "mysql").lower() == "mysql":
+                return f"`{name.replace('`', '``')}`"
+            return f'"{name.replace("\"", "\"\"")}"'
+
+        # Single-quote a string literal safely. This is sufficient for the
+        # PK/marker values we emit here (already known strings), and works
+        # for both MySQL and SQLite.
+        def lit(value: str) -> str:
+            return "'" + str(value).replace("'", "''") + "'"
+
         conditions = []
 
         if self.pk_column and self.pk_range_start and self.pk_range_end:
             conditions.append(
-                f"`{self.pk_column}` >= '{self.pk_range_start}' "
-                f"AND `{self.pk_column}` <= '{self.pk_range_end}'"
+                f"{q(self.pk_column)} >= {lit(self.pk_range_start)} "
+                f"AND {q(self.pk_column)} <= {lit(self.pk_range_end)}"
             )
 
         if self.marker_column and self.marker_value:
-            conditions.append(f"`{self.marker_column}` = '{self.marker_value}'")
+            conditions.append(f"{q(self.marker_column)} = {lit(self.marker_value)}")
 
         if self.custom_where:
             conditions.append(f"({self.custom_where})")
@@ -73,20 +90,30 @@ class CleanupPlan:
     def add_target(self, target: CleanupTarget) -> None:
         self.targets.append(target)
 
-    def generate_sql(self) -> list[str]:
-        """Generate DELETE SQL statements."""
+    def generate_sql(self, dialect: str = "mysql") -> list[str]:
+        """Generate DELETE SQL statements for the given dialect."""
+        def qname(name: str) -> str:
+            if (dialect or "mysql").lower() == "mysql":
+                return f"`{name.replace('`', '``')}`"
+            return f'"{name.replace("\"", "\"\"")}"'
+
         stmts = []
         for target in self.targets:
-            where = target.build_where_clause()
-            stmts.append(f"DELETE FROM `{target.table_name}` WHERE {where};")
+            where = target.build_where_clause(dialect)
+            stmts.append(f"DELETE FROM {qname(target.table_name)} WHERE {where};")
         return stmts
 
-    def generate_count_sql(self) -> list[str]:
+    def generate_count_sql(self, dialect: str = "mysql") -> list[str]:
         """Generate COUNT SQL to preview how many rows will be deleted."""
+        def qname(name: str) -> str:
+            if (dialect or "mysql").lower() == "mysql":
+                return f"`{name.replace('`', '``')}`"
+            return f'"{name.replace("\"", "\"\"")}"'
+
         stmts = []
         for target in self.targets:
-            where = target.build_where_clause()
-            stmts.append(f"SELECT COUNT(*) AS cnt FROM `{target.table_name}` WHERE {where};")
+            where = target.build_where_clause(dialect)
+            stmts.append(f"SELECT COUNT(*) AS cnt FROM {qname(target.table_name)} WHERE {where};")
         return stmts
 
     def to_dict(self) -> dict[str, Any]:
@@ -99,10 +126,10 @@ class CleanupPlan:
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
 
-    def save_sql(self, cleanup_dir: Path) -> Path:
+    def save_sql(self, cleanup_dir: Path, dialect: str = "mysql") -> Path:
         """Save cleanup SQL to file."""
         cleanup_dir.mkdir(parents=True, exist_ok=True)
-        sql_stmts = self.generate_sql()
+        sql_stmts = self.generate_sql(dialect)
         path = cleanup_dir / f"cleanup_{self.campaign_id}.sql"
         with path.open("w", encoding="utf-8") as f:
             f.write(f"-- Cleanup SQL for campaign: {self.campaign_id}\n")
@@ -166,6 +193,7 @@ def execute_cleanup(
     )
 
     total = len(plan.targets)
+    dialect = (conn_config.dialect or "mysql").lower()
 
     for i, target in enumerate(plan.targets):
         detail = {"table_name": target.table_name, "rows_affected": 0, "success": True, "error": ""}
@@ -178,18 +206,19 @@ def execute_cleanup(
                 report.details.append(detail)
                 continue
 
-            where = target.build_where_clause()
+            where = target.build_where_clause(dialect)
+            qt = db.quote_identifier(target.table_name)
 
             if dry_run:
                 # Count only
-                count_sql = f"SELECT COUNT(*) FROM `{target.table_name}` WHERE {where}"
+                count_sql = f"SELECT COUNT(*) FROM {qt} WHERE {where}"
                 rows = db.query(count_sql)
                 count = int(rows[0][0]) if rows else 0
                 detail["rows_affected"] = count
                 logger.info(f"[DRY-RUN] {target.table_name}: {count} rows would be deleted")
             else:
                 # Actually delete
-                delete_sql = f"DELETE FROM `{target.table_name}` WHERE {where}"
+                delete_sql = f"DELETE FROM {qt} WHERE {where}"
                 affected = db.execute(delete_sql)
                 detail["rows_affected"] = affected
                 report.total_rows_deleted += affected

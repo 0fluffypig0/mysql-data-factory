@@ -1,4 +1,4 @@
-# MySQL Data Factory 3.0.1 — Quick Start
+# MySQL Data Factory 3.0.2 — Quick Start
 
 This is the shortest path from unpacked project to a real database append run.
 

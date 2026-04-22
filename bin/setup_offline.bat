@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal
 
 echo ========================================
-echo MySQL Data Factory 3.0.1 - Offline Setup
+echo MySQL Data Factory 3.0.2 - Offline Setup
 echo ========================================
 echo.
 

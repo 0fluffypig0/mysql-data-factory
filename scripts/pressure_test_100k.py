@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 3.00 - 100k Pressure Test
+MySQL Data Factory 3.0.2 - 100k Pressure Test
 
 Measures end-to-end throughput for 100,000 row insertion:
 - Generate phase timing
@@ -23,6 +23,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src import __version__
+
 
 def fmt_seconds(secs: float) -> str:
     if secs < 60:
@@ -31,13 +33,45 @@ def fmt_seconds(secs: float) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="100k pressure test")
-    parser.add_argument("--env-file", default=".env")
-    parser.add_argument("--table", help="Target table (auto-detect if omitted)")
-    parser.add_argument("--rows", type=int, default=100_000)
-    parser.add_argument("--batch-size", type=int, default=500)
-    parser.add_argument("--chunk-size", type=int, default=5000)
-    parser.add_argument("--dry-run", action="store_true", help="Generate but do not insert")
+    parser = argparse.ArgumentParser(
+        description=f"MySQL Data Factory {__version__} - 100k pressure test "
+                    "(throughput and latency benchmark)"
+    )
+    parser.add_argument(
+        "--env-file",
+        default=".env",
+        help="Path to .env file with DB credentials (default: .env in project root)",
+    )
+    parser.add_argument(
+        "--table",
+        help="Target table. If omitted, auto-picks the first table with data and a primary key.",
+    )
+    parser.add_argument(
+        "--rows",
+        type=int,
+        default=100_000,
+        help="Number of rows to insert (default: 100000). "
+             "Script extrapolates 1M-row ETA from the measured throughput.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        help="Rows per INSERT batch (default: 500). "
+             "Try 1000-2000 for higher throughput; too large may exceed max_allowed_packet.",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=5000,
+        help="Rows per generated CSV chunk file (default: 5000). "
+             "Larger chunks mean fewer files but higher peak memory.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Generate CSV chunks but skip the insert phase. Useful for I/O profiling.",
+    )
     args = parser.parse_args()
 
     from src.config.app_config import load_dotenv_file, ConnectionConfig, AppPaths
@@ -52,7 +86,7 @@ def main() -> int:
     paths = AppPaths()
     paths.ensure_all()
 
-    print(f"=== MySQL Data Factory 3.00 - Pressure Test ({args.rows:,} rows) ===")
+    print(f"=== MySQL Data Factory {__version__} - Pressure Test ({args.rows:,} rows) ===")
     print(f"    batch_size={args.batch_size}  chunk_size={args.chunk_size}  dry_run={args.dry_run}\n")
 
     # ── 1. Connect (shared, simulating bastion keep-alive) ──

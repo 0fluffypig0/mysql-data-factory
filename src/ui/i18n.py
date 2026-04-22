@@ -1,5 +1,5 @@
 """
-Internationalization (i18n) for MySQL Data Factory 3.0.1 GUI.
+Internationalization (i18n) for MySQL Data Factory 3.0.2 GUI.
 
 Supports: zh_CN (简体中文), en (English), ja (日本語)
 Language preference is persisted to config/gui_language.json.
@@ -11,7 +11,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from src.utils.runtime_paths import get_app_root
+
+_PROJECT_ROOT = get_app_root()
 _LANG_FILE = _PROJECT_ROOT / "config" / "gui_language.json"
 
 # Current language code
@@ -25,9 +27,9 @@ _current_lang: str = "zh_CN"
 _TEXTS: dict[str, dict[str, str]] = {
     # ── Window ──
     "window.title": {
-        "zh_CN": "MySQL Data Factory 3.0.1",
-        "en":    "MySQL Data Factory 3.0.1",
-        "ja":    "MySQL Data Factory 3.0.1",
+        "zh_CN": "MySQL Data Factory 3.0.2",
+        "en":    "MySQL Data Factory 3.0.2",
+        "ja":    "MySQL Data Factory 3.0.2",
     },
 
     # ── Tab names ──
@@ -47,6 +49,34 @@ _TEXTS: dict[str, dict[str, str]] = {
     # ── Connection page ──
     "conn.profile_group":   {"zh_CN": "连接配置",     "en": "Connection Profile", "ja": "接続プロファイル"},
     "conn.profile_label":   {"zh_CN": "配置:",        "en": "Profile:",           "ja": "プロファイル:"},
+    "conn.dialect":         {"zh_CN": "数据库类型:",  "en": "Dialect:",           "ja": "DBMS:"},
+    "conn.browse":          {"zh_CN": "浏览...",      "en": "Browse...",          "ja": "参照..."},
+    "conn.sqlite_hint":     {"zh_CN": "SQLite 文件路径，或 :memory: 表示内存库",
+                              "en": "SQLite file path, or :memory: for an in-memory DB",
+                              "ja": "SQLite ファイルパス、または :memory: でメモリ DB"},
+    "conn.oracle_hint":     {"zh_CN": "Oracle：在「数据库」处填写 service_name（推荐）。只有 SID 时也可填 SID（Easy Connect 同时兼容）。默认端口 1521。",
+                              "en": "Oracle: put the service_name in the \"Database\" field (recommended). If you only have a SID, enter the SID — Easy Connect accepts both. Default port 1521.",
+                              "ja": "Oracle：「データベース」欄に service_name（推奨）を入力。SID しか無い場合は SID を入力（Easy Connect は両方受け付けます）。デフォルトポート 1521。"},
+
+    # ── Connection page — "supported engines" info panel ──
+    "conn.engines_group":   {"zh_CN": "所选数据库 — 支持的引擎 / 驱动",
+                              "en":    "Selected dialect — supported engines / driver",
+                              "ja":    "選択中の DB — 対応エンジン / ドライバ"},
+    "conn.engines_driver":  {"zh_CN": "驱动:",
+                              "en":    "Driver:",
+                              "ja":    "ドライバ:"},
+    "conn.engines_supports": {"zh_CN": "兼容引擎:",
+                              "en":    "Compatible engines:",
+                              "ja":    "対応エンジン:"},
+    "conn.engines_fastpath": {"zh_CN": "高速导入:",
+                              "en":    "Fast insert path:",
+                              "ja":    "高速投入経路:"},
+    "conn.database_service":{"zh_CN": "服务名:",
+                              "en":    "Service Name:",
+                              "ja":    "サービス名:"},
+    "conn.database_file":   {"zh_CN": "SQLite 文件:",
+                              "en":    "SQLite File:",
+                              "ja":    "SQLite ファイル:"},
     "conn.save_profile":    {"zh_CN": "保存配置",     "en": "Save Profile",       "ja": "プロファイル保存"},
     "conn.delete_profile":  {"zh_CN": "删除配置",     "en": "Delete Profile",     "ja": "プロファイル削除"},
     "conn.load_env":        {"zh_CN": "从 .env 加载", "en": "Load from .env",     "ja": ".envから読込"},
@@ -117,9 +147,44 @@ _TEXTS: dict[str, dict[str, str]] = {
     "preview.summary":      {"zh_CN": "Campaign: {cid} | 表: {tables} | 总行数: {rows}", "en": "Campaign: {cid} | Tables: {tables} | Total rows: {rows}", "ja": "Campaign: {cid} | テーブル: {tables} | 合計行数: {rows}"},
     "preview.refresh":      {"zh_CN": "刷新预览",   "en": "Refresh Preview", "ja": "プレビュー更新"},
     "preview.execute":      {"zh_CN": "执行 Campaign", "en": "Execute Campaign", "ja": "Campaign 実行"},
+    "preview.fast_mode":    {"zh_CN": "高速模式 (LOAD DATA LOCAL)", "en": "Fast mode (LOAD DATA LOCAL)", "ja": "高速モード (LOAD DATA LOCAL)"},
+    "preview.fast_mode_hint": {"zh_CN": "需要服务端 local_infile=ON，关闭时自动回退 INSERT", "en": "Requires server local_infile=ON; falls back to INSERT when off.", "ja": "サーバ側 local_infile=ON が必要。無効時は INSERT に自動フォールバック。"},
+    "preview.keep_chunks":  {"zh_CN": "保留分片文件 (取消勾选可节省磁盘)", "en": "Keep chunk files (uncheck to save disk)", "ja": "チャンクファイルを保持 (オフで容量節約)"},
     "preview.first_rows":   {"zh_CN": "预览 (前 5 行):", "en": "Preview (first 5 rows):", "ja": "プレビュー (最初の5行):"},
     "preview.confirm_title":{"zh_CN": "确认执行", "en": "Confirm Execution", "ja": "実行確認"},
     "preview.confirm_msg":  {"zh_CN": "执行包含 {tables} 张表, 共 {rows} 行的 Campaign?\n\nCampaign ID: {cid}", "en": "Execute campaign with {tables} tables, {rows} total rows?\n\nCampaign ID: {cid}", "ja": "{tables} テーブル, 合計 {rows} 行の Campaign を実行しますか？\n\nCampaign ID: {cid}"},
+
+    # ── Preview page — dry-run estimator ──
+    "preview.estimate":           {"zh_CN": "试算 (Dry-run)", "en": "Estimate (Dry-run)", "ja": "試算 (Dry-run)"},
+    "preview.est_dialog_title":   {"zh_CN": "执行前试算", "en": "Pre-execution Estimate", "ja": "実行前試算"},
+    "preview.est_summary":        {"zh_CN": "整体预估", "en": "Overall Estimate", "ja": "全体見積り"},
+    "preview.est_disk":           {"zh_CN": "磁盘检查 (CSV 分片)", "en": "Disk Check (CSV Chunks)", "ja": "ディスクチェック (CSV)"},
+    "preview.est_per_table":      {"zh_CN": "按表详情", "en": "Per-table Breakdown", "ja": "テーブル別詳細"},
+    "preview.est_total_rows":     {"zh_CN": "总行数:",         "en": "Total rows:",         "ja": "合計行数:"},
+    "preview.est_total_size":     {"zh_CN": "CSV 合计大小:",   "en": "Total CSV size:",     "ja": "CSV 合計サイズ:"},
+    "preview.est_peak_chunk":     {"zh_CN": "单次最大分片:",   "en": "Peak chunk size:",    "ja": "最大チャンク:"},
+    "preview.est_time":           {"zh_CN": "预计时长:",       "en": "Estimated time:",     "ja": "予測時間:"},
+    "preview.est_disk_path":      {"zh_CN": "检查路径:",       "en": "Check path:",         "ja": "チェック先:"},
+    "preview.est_disk_free":      {"zh_CN": "可用空间:",       "en": "Free space:",         "ja": "空き容量:"},
+    "preview.est_disk_need":      {"zh_CN": "预计需要:",       "en": "Needed:",             "ja": "必要容量:"},
+    "preview.est_disk_green":     {"zh_CN": "空间充足，可以执行。", "en": "Disk space looks OK.", "ja": "空き容量は十分です。"},
+    "preview.est_disk_yellow":    {"zh_CN": "警告：CSV 将占用 ≥80% 可用空间，建议减少行数或清理磁盘。",
+                                    "en":    "Warning: CSV will consume >=80% of free disk. Consider lowering row count or freeing disk space.",
+                                    "ja":    "警告：CSV が空き容量の80%以上を使用します。行数を減らすかディスクを整理してください。"},
+    "preview.est_disk_red":       {"zh_CN": "危险：CSV 将超出可用空间，执行会中断！请减少行数或释放磁盘。",
+                                    "en":    "DANGER: CSV will EXCEED free disk space. Execution will fail. Reduce row count or free disk space.",
+                                    "ja":    "危険：CSV が空き容量を超過します。実行が失敗します。行数を削減するかディスクを解放してください。"},
+    "preview.est_disk_unknown":   {"zh_CN": "无法获取磁盘信息", "en": "Disk info unavailable", "ja": "ディスク情報を取得できません"},
+    "preview.est_col_table":      {"zh_CN": "表名",       "en": "Table",         "ja": "テーブル"},
+    "preview.est_col_rows":       {"zh_CN": "行数",       "en": "Rows",          "ja": "行数"},
+    "preview.est_col_bpr":        {"zh_CN": "字节/行",    "en": "Bytes/row",     "ja": "バイト/行"},
+    "preview.est_col_total":      {"zh_CN": "CSV 合计",   "en": "Total CSV",     "ja": "CSV 合計"},
+    "preview.est_col_chunks":     {"zh_CN": "分片数",     "en": "Chunks",        "ja": "チャンク数"},
+    "preview.est_col_peak":       {"zh_CN": "单片峰值",   "en": "Peak chunk",    "ja": "チャンク最大"},
+    "preview.est_col_time":       {"zh_CN": "预估耗时",   "en": "Time est.",     "ja": "予測時間"},
+    "preview.est_close":          {"zh_CN": "关闭",       "en": "Close",         "ja": "閉じる"},
+    "preview.est_rate_note":      {"zh_CN": "速率假设: {rate} 行/秒", "en": "Rate: {rate} rows/s", "ja": "速度: {rate} 行/秒"},
+    "preview.est_no_plan":        {"zh_CN": "请先完成任务配置", "en": "Configure tasks first.", "ja": "タスクを先に設定してください"},
 
     # ── Execute page ──
     "exec.no_exec":         {"zh_CN": "无正在执行的任务", "en": "No execution in progress", "ja": "実行中のタスクなし"},
@@ -153,9 +218,19 @@ _TEXTS: dict[str, dict[str, str]] = {
     "hist.confirm_delete_msg":   {"zh_CN": "将删除 Campaign {cid} 的数据。\n影响表数: {n}\n\n确定？", "en": "This will DELETE data for campaign {cid}.\nTables affected: {n}\n\nAre you sure?", "ja": "Campaign {cid} のデータを削除します。\n対象テーブル数: {n}\n\nよろしいですか？"},
     "hist.cleanup_done":    {"zh_CN": "[{mode}] {n} 张表已处理。\n影响行数: {rows}", "en": "[{mode}] {n} tables processed.\nRows affected: {rows}", "ja": "[{mode}] {n} テーブル処理完了。\n影響行数: {rows}"},
     "hist.no_campaign":     {"zh_CN": "请输入 Campaign ID", "en": "Enter a campaign ID.", "ja": "Campaign IDを入力してください"},
+    "hist.no_selection":    {"zh_CN": "请在 Plans 或 Reports 选择记录，或输入 Campaign ID", "en": "Select rows in Plans/Reports tab, or enter a Campaign ID.", "ja": "Plans/Reportsタブで行を選択するか、Campaign IDを入力してください"},
     "hist.no_sql":          {"zh_CN": "未找到该 Campaign 的 Cleanup SQL", "en": "No cleanup SQL found for {cid}", "ja": "Campaign {cid} の Cleanup SQL が見つかりません"},
     "hist.no_targets":      {"zh_CN": "报告中未找到清理目标", "en": "No cleanup targets found in reports.", "ja": "レポートにクリーンアップ対象が見つかりません"},
     "hist.no_conn":         {"zh_CN": "未连接数据库，请先连接", "en": "No database connection. Go to Connection tab first.", "ja": "DB未接続。接続タブで先に接続してください"},
+    "hist.batch_hint":      {"zh_CN": "提示：在 Plans 或 Reports 中 Ctrl/Shift+点击可多选，用 [全选] 一次清理多批数据。",
+                             "en":    "Tip: Ctrl/Shift-click rows in Plans or Reports to multi-select. Use [Select All] to clean everything at once.",
+                             "ja":    "ヒント：Plans/Reports で Ctrl/Shift+クリックで複数選択。[全選択] で一括クリーンアップ。"},
+    "hist.select_all":      {"zh_CN": "全选",       "en": "Select All",      "ja": "全選択"},
+    "hist.deselect_all":    {"zh_CN": "清除选择",   "en": "Deselect All",    "ja": "選択解除"},
+    "hist.selected_count":  {"zh_CN": "已选 {n} 项", "en": "{n} selected",   "ja": "{n} 件選択"},
+    "hist.campaign_multiple": {"zh_CN": "(多个 Campaign)", "en": "(multiple)", "ja": "(複数)"},
+    "hist.confirm_campaigns_count": {"zh_CN": "涉及 Campaign 数:", "en": "Campaigns:", "ja": "対象 Campaign 数:"},
+    "hist.confirm_campaigns_list":  {"zh_CN": "Campaign IDs:",    "en": "Campaign IDs:", "ja": "Campaign IDs:"},
     "hist.col_time":        {"zh_CN": "时间",       "en": "Time",            "ja": "時間"},
     "hist.col_db":          {"zh_CN": "数据库",     "en": "Database",        "ja": "データベース"},
     "hist.col_table":       {"zh_CN": "表名",       "en": "Table",           "ja": "テーブル"},

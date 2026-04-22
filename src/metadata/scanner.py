@@ -150,8 +150,26 @@ def scan_database(db: DatabaseManager, table_filter: list[str] | None = None,
 
 # --- Cache I/O ---
 
+def _sanitize_db_name_for_filename(database_name: str) -> str:
+    """
+    Turn a database name into a safe filename fragment.
+
+    MySQL DB names are normally simple, but SQLite "database names" are file
+    paths which can contain drive letters (`C:\\...`), backslashes, colons,
+    and forward slashes — none of which are legal in a Windows filename.
+    Strip the path down to its stem and replace anything unusual with `_`.
+    """
+    import re
+    # For SQLite-style paths, grab the final component without extension
+    # so a DB at `data/mydata.sqlite3` caches as `db_scan_mydata.json`.
+    if "/" in database_name or "\\" in database_name or ":" in database_name:
+        stem = Path(database_name).stem or "sqlite_db"
+        database_name = stem
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", database_name)
+
+
 def get_cache_path(cache_dir: Path, database_name: str) -> Path:
-    return cache_dir / f"db_scan_{database_name}.json"
+    return cache_dir / f"db_scan_{_sanitize_db_name_for_filename(database_name)}.json"
 
 
 def save_scan_result(result: DatabaseScanResult, cache_dir: Path) -> Path:

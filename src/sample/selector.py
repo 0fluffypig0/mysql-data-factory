@@ -50,9 +50,9 @@ def select_by_pk(db: DatabaseManager, table_name: str,
     if len(pk_columns) != len(pk_values):
         raise ValueError(f"PK columns count ({len(pk_columns)}) != values count ({len(pk_values)})")
 
-    where_parts = [f"`{col}` = %s" for col in pk_columns]
+    where_parts = [f"{db.quote_identifier(col)} = %s" for col in pk_columns]
     where_clause = " AND ".join(where_parts)
-    sql = f"SELECT * FROM `{table_name}` WHERE {where_clause} LIMIT 1"
+    sql = f"SELECT * FROM {db.quote_identifier(table_name)} WHERE {where_clause} LIMIT 1"
 
     rows = db.query_dicts(sql, tuple(pk_values))
     if not rows:
@@ -74,7 +74,7 @@ def select_by_where(db: DatabaseManager, table_name: str,
                     where_clause: str) -> list[SampleSelection]:
     """Select sample records using a custom WHERE clause."""
 
-    sql = f"SELECT * FROM `{table_name}` WHERE {where_clause} LIMIT 10"
+    sql = f"SELECT * FROM {db.quote_identifier(table_name)} WHERE {where_clause} LIMIT 10"
     rows = db.query_dicts(sql)
     column_order = db.get_column_names(table_name)
 
@@ -94,7 +94,7 @@ def select_top_rows(db: DatabaseManager, table_name: str,
                     limit: int = 5) -> list[SampleSelection]:
     """Select top N rows from a table."""
 
-    sql = f"SELECT * FROM `{table_name}` LIMIT {int(limit)}"
+    sql = f"SELECT * FROM {db.quote_identifier(table_name)} LIMIT {int(limit)}"
     rows = db.query_dicts(sql)
     column_order = db.get_column_names(table_name)
 

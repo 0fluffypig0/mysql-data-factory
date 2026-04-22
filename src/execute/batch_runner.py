@@ -32,6 +32,15 @@ class BatchConfig:
     stop_on_error: bool = True
     dry_run: bool = False
     skip_db_check: bool = False
+    # Insertion mode: "insert" (default, per-batch INSERT via executemany)
+    # or "load_data" (LOAD DATA LOCAL INFILE per chunk file — much faster,
+    # requires server-side `local_infile = ON`).
+    insert_mode: str = "insert"
+    # When True (default), chunk files are kept after successful insertion
+    # for troubleshooting / export workflows. When False, each chunk file
+    # is deleted once its rows are loaded — useful on bastion hosts with
+    # small local disks.
+    keep_chunks: bool = True
 
 
 @dataclass
@@ -96,15 +105,55 @@ def read_chunk_csv(file_path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def list_chunk_files(input_path: Path) -> list[Path]:
-    """List chunk CSV files from a file or directory."""
+    """List chunk CSV or TSV files from a file or directory."""
     if input_path.is_file():
         return [input_path]
     if input_path.is_dir():
         return sorted(
             p for p in input_path.iterdir()
-            if p.is_file() and p.suffix.lower() == ".csv"
+            if p.is_file() and p.suffix.lower() in (".csv", ".tsv")
         )
     return []
+
+
+def _first_tsv_first_col(path: Path) -> str:
+    """Read the first line of a TSV and return the first tab-separated field (PK)."""
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            line = f.readline().rstrip("\n")
+        if not line:
+            return ""
+        val = line.split("\t", 1)[0]
+        return "" if val == "\\N" else val
+    except Exception:
+        return ""
+
+
+def _last_tsv_first_col(path: Path) -> str:
+    """Scan a TSV and return the first field of the last non-empty line."""
+    last = ""
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if line:
+                    last = line.split("\t", 1)[0]
+    except Exception:
+        return ""
+    return "" if last == "\\N" else last
+
+
+def _count_tsv_rows(path: Path) -> int:
+    """Count non-empty lines in a TSV file."""
+    try:
+        n = 0
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if line.rstrip("\n"):
+                    n += 1
+        return n
+    except Exception:
+        return 0
 
 
 def _normalize_value(value: str, column_name: str, json_columns: list[str]) -> Any:
@@ -142,7 +191,7 @@ def insert_chunk_files(
     db: DatabaseManager | None = None,
 ) -> InsertionReport:
     """
-    Insert data from chunk CSV files into the database.
+    Insert data from chunk files (CSV for INSERT mode, TSV for LOAD DATA mode).
 
     When `db` is provided, uses that shared connection for all batches
     (required for bastion host one-time credentials).
@@ -154,6 +203,29 @@ def insert_chunk_files(
         batch_config = BatchConfig()
     if json_columns is None:
         json_columns = []
+
+    # Dispatch to LOAD DATA branch when requested. The INSERT path below is
+    # unchanged to preserve behavior for all existing callers.
+    # Guard: LOAD DATA LOCAL INFILE is MySQL-only; silently fall back to the
+    # INSERT path for any other dialect so direct callers of this function
+    # (scripts, tests) get graceful behavior instead of a hard SQL error.
+    if batch_config.insert_mode == "load_data" and not batch_config.dry_run:
+        if not conn_config.is_mysql():
+            logger.warning(
+                f"insert_mode='load_data' ignored: dialect={conn_config.dialect} "
+                "does not support LOAD DATA LOCAL INFILE. Using INSERT path."
+            )
+        else:
+            return _insert_via_load_data(
+                conn_config=conn_config,
+                table_name=table_name,
+                chunk_files=chunk_files,
+                batch_config=batch_config,
+                campaign_id=campaign_id,
+                task_id=task_id,
+                progress_callback=progress_callback,
+                db=db,
+            )
 
     report = InsertionReport(
         table_name=table_name,
@@ -186,10 +258,12 @@ def insert_chunk_files(
     pk_first: str = ""
     pk_last: str = ""
 
-    # Build SQL
-    columns_sql = ", ".join(f"`{c}`" for c in fieldnames)
+    # Build SQL — dialect-aware quoting so the same code path works for
+    # MySQL (backticks) and SQLite (double-quotes).
+    q = conn_config.quote_identifier
+    columns_sql = ", ".join(q(c) for c in fieldnames)
     placeholders = ", ".join(["%s"] * len(fieldnames))
-    insert_sql = f"INSERT INTO `{table_name}` ({columns_sql}) VALUES ({placeholders})"
+    insert_sql = f"INSERT INTO {q(table_name)} ({columns_sql}) VALUES ({placeholders})"
 
     # Process chunk files one at a time (streaming)
     batch_size = batch_config.batch_size
@@ -302,6 +376,164 @@ def insert_chunk_files(
         report.pk_range_start = pk_first
     if pk_last:
         report.pk_range_end = pk_last
+
+    report.failed_batches = sum(1 for b in report.batch_results if not b.success)
+    report.status = "completed" if report.failed_batches == 0 else "failed"
+    report.end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    return report
+
+
+def _insert_via_load_data(
+    conn_config: ConnectionConfig,
+    table_name: str,
+    chunk_files: list[Path],
+    batch_config: BatchConfig,
+    campaign_id: str,
+    task_id: str,
+    progress_callback,
+    db: DatabaseManager | None,
+) -> InsertionReport:
+    """
+    Fast-insert path using LOAD DATA LOCAL INFILE, one statement per chunk file.
+
+    Each chunk file = one batch from the report's perspective.
+    Chunk files are expected to be TSV in MySQL-native format
+    (produced by row_builder._write_load_data_tsv).
+
+    If `batch_config.keep_chunks` is False, each file is deleted right after
+    a successful load — this caps peak disk use at a single chunk file,
+    which matters on bastion hosts with small local disks.
+    """
+    from datetime import datetime
+
+    from src.execute.loader import load_data_chunk
+
+    report = InsertionReport(
+        table_name=table_name,
+        task_id=task_id,
+        campaign_id=campaign_id,
+        run_id=f"{campaign_id}_{task_id}" if campaign_id else task_id,
+        status="running",
+        mode="insert",
+        start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        chunk_files=[str(f) for f in chunk_files],
+    )
+
+    if not chunk_files:
+        report.status = "completed"
+        report.end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return report
+
+    # Shared connection is required for LOAD DATA mode — reconnecting between
+    # chunks would pay the handshake cost repeatedly and, on bastion hosts,
+    # burn one-time credentials.
+    _shared = db is not None
+    _db = db if _shared else DatabaseManager(config=conn_config)
+    if not _shared and not _db.connect():
+        report.status = "failed"
+        report.error_summary = "Failed to connect to database"
+        report.end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return report
+
+    # Column list must match the TSV column order. Both were derived from
+    # INFORMATION_SCHEMA.COLUMNS ORDER BY ORDINAL_POSITION, so this is stable.
+    try:
+        columns = _db.get_column_names(table_name)
+    except Exception as exc:
+        report.status = "failed"
+        report.error_summary = f"Could not read columns for {table_name}: {exc}"
+        report.end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if not _shared:
+            _db.disconnect()
+        return report
+
+    if not columns:
+        report.status = "failed"
+        report.error_summary = f"Table {table_name} has no columns"
+        report.end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if not _shared:
+            _db.disconnect()
+        return report
+
+    total_batches = len(chunk_files)
+    report.total_batches = total_batches
+
+    # Pre-count attempted rows so the UI progress bar has a meaningful total.
+    total_attempt = 0
+    for cf in chunk_files:
+        total_attempt += _count_tsv_rows(cf)
+    report.total_rows_attempted = total_attempt
+
+    pk_first_val = ""
+    pk_last_val = ""
+    error_count = 0
+
+    try:
+        for i, cf in enumerate(chunk_files, start=1):
+            batch_result = BatchResult(batch_index=i)
+            # Attempted-rows comes from line count; we don't normalize empties.
+            chunk_rows = _count_tsv_rows(cf)
+            batch_result.rows_attempted = chunk_rows
+
+            # Track PK range via cheap file peek (first col of first/last line).
+            if i == 1:
+                pk_first_val = _first_tsv_first_col(cf)
+            pk_last_val = _last_tsv_first_col(cf) or pk_last_val
+
+            try:
+                affected = load_data_chunk(_db, table_name, columns, cf)
+                batch_result.rows_inserted = affected
+                batch_result.success = True
+                report.total_rows_inserted += affected
+                logger.success(
+                    f"LOAD DATA {i}/{total_batches}: {cf.name} → {affected} rows"
+                )
+            except Exception as exc:
+                batch_result.success = False
+                batch_result.error_message = str(exc)
+                error_count += 1
+                logger.error(f"LOAD DATA failed for {cf.name}: {exc}")
+
+            report.batch_results.append(batch_result)
+
+            if progress_callback:
+                progress_callback(
+                    i, total_batches, batch_result.rows_inserted,
+                    report.total_rows_inserted,
+                )
+
+            # Delete chunk file after successful load, if keep_chunks=False.
+            # Leave failed chunks on disk for debugging.
+            if batch_result.success and not batch_config.keep_chunks:
+                try:
+                    cf.unlink()
+                    logger.debug(f"Deleted loaded chunk: {cf.name}")
+                except Exception as exc:
+                    logger.warning(f"Could not delete {cf.name}: {exc}")
+
+            if not batch_result.success and batch_config.stop_on_error:
+                report.error_summary = (
+                    f"Stopped at chunk {i}: {batch_result.error_message}"
+                )
+                break
+
+            if error_count >= batch_config.max_errors:
+                report.error_summary = (
+                    f"Max errors ({batch_config.max_errors}) reached"
+                )
+                break
+
+            if batch_config.throttle_ms > 0:
+                time.sleep(batch_config.throttle_ms / 1000.0)
+    finally:
+        if not _shared:
+            _db.disconnect()
+
+    if pk_first_val:
+        report.pk_range_start = pk_first_val
+    if pk_last_val:
+        report.pk_range_end = pk_last_val
 
     report.failed_batches = sum(1 for b in report.batch_results if not b.success)
     report.status = "completed" if report.failed_batches == 0 else "failed"

@@ -177,6 +177,8 @@ def run_campaign(
     progress_callback=None,
     db: DatabaseManager | None = None,
     detail_callback=None,
+    insert_mode: str = "insert",
+    keep_chunks: bool = True,
 ) -> RunResult:
     """
     Execute a campaign plan.
@@ -188,7 +190,39 @@ def run_campaign(
         scan_result: Cached DatabaseScanResult (optional)
         progress_callback: Optional callable(task_index, total_tasks, phase, detail)
             phase: "sample" | "generate" | "insert" | "done"
+        insert_mode: "insert" (default) or "load_data" for LOAD DATA LOCAL INFILE.
+        keep_chunks: When False in load_data mode, delete each chunk after
+            a successful load (caps peak disk use at one chunk ≈ 500KB).
     """
+    # In load_data mode, probe the server once up front — if it rejects
+    # LOAD DATA LOCAL we fall back to INSERT and warn. This avoids failing
+    # mid-run on a table we've already generated data for.
+    if insert_mode == "load_data":
+        # Fast path: LOAD DATA LOCAL INFILE is a MySQL-only statement.
+        # Fall back immediately for any other dialect instead of pretending
+        # to probe — keeps the log message honest.
+        if not conn_config.is_mysql():
+            logger.warning(
+                f"insert_mode='load_data' is only supported on MySQL "
+                f"(current dialect: {conn_config.dialect}). Falling back to INSERT."
+            )
+            insert_mode = "insert"
+        else:
+            _probe = db if db is not None else DatabaseManager(config=conn_config)
+            _probe_owned = db is None
+            if _probe_owned:
+                _probe.connect()
+            try:
+                if not _probe.check_local_infile():
+                    logger.warning(
+                        "Server has local_infile=OFF. Falling back to INSERT mode. "
+                        "To enable: SET GLOBAL local_infile = 1;"
+                    )
+                    insert_mode = "insert"
+            finally:
+                if _probe_owned:
+                    _probe.disconnect()
+
     plan.status = "running"
     result = RunResult(campaign_id=plan.campaign_id)
     cleanup = CleanupPlan(campaign_id=plan.campaign_id)
@@ -196,7 +230,7 @@ def run_campaign(
     total_tasks = len(plan.tasks)
     db_name = conn_config.database if conn_config else ""
     campaign_dir_name = _build_campaign_dir_name(plan.campaign_id, db_name)
-    logger.info(f"Campaign output dir: {campaign_dir_name}")
+    logger.info(f"Campaign output dir: {campaign_dir_name} (insert_mode={insert_mode})")
 
     for task_idx, task in enumerate(plan.tasks):
         logger.info(f"=== Task {task_idx+1}/{total_tasks}: {task.table_name} ===")
@@ -208,7 +242,9 @@ def run_campaign(
             report = _run_single_task(task, conn_config, paths, scan_result, cleanup,
                                        plan.campaign_id, progress_callback, task_idx, total_tasks,
                                        db=db, detail_callback=detail_callback,
-                                       campaign_dir_name=campaign_dir_name)
+                                       campaign_dir_name=campaign_dir_name,
+                                       insert_mode=insert_mode,
+                                       keep_chunks=keep_chunks)
             result.reports.append(report)
 
             if report.status == "failed":
@@ -264,6 +300,8 @@ def _run_single_task(
     db: DatabaseManager | None = None,
     detail_callback=None,
     campaign_dir_name: str = "",
+    insert_mode: str = "insert",
+    keep_chunks: bool = True,
 ) -> InsertionReport:
     """Run a single task item."""
 
@@ -345,6 +383,10 @@ def _run_single_task(
             log_line=f"[generate] {table_name} chunk {chunk_idx}/{total_chunks} ({generated_total:,} rows)",
         ))
 
+    # LOAD DATA mode needs the MySQL-native TSV format (no header, \N for NULL);
+    # INSERT mode keeps CSV so preview/export workflows stay Excel-friendly.
+    file_format = "tsv" if insert_mode == "load_data" and task.mode == "insert" else "csv"
+
     chunk_files = generate_to_chunks(
         template_fieldnames=column_order,
         template_row=template_row,
@@ -359,6 +401,7 @@ def _run_single_task(
         marker_value=task.marker_value,
         progress_callback=_on_chunk_generated,
         pk_columns_for_filename=pk_columns,
+        file_format=file_format,
     )
 
     # Step 4: Insert (or dry-run/export)
@@ -383,6 +426,8 @@ def _run_single_task(
         batch_config = BatchConfig(
             batch_size=task.batch_size,
             dry_run=(task.mode == "dry-run"),
+            insert_mode=insert_mode if task.mode == "insert" else "insert",
+            keep_chunks=keep_chunks,
         )
 
         _ins_start = time.monotonic()

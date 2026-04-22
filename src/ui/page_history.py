@@ -24,11 +24,11 @@ from src.utils.timezone import format_jst
 class CleanupConfirmDialog(tk.Toplevel):
     """High-safety confirmation dialog for cleanup."""
 
-    def __init__(self, parent, db_name: str, campaign_id: str,
+    def __init__(self, parent, db_name: str, campaign_ids: list[str],
                  table_infos: list[dict]):
         super().__init__(parent)
         self.title(t("hist.confirm_dialog_title"))
-        self.geometry("700x560")
+        self.geometry("720x600")
         self.resizable(True, True)
         self.result = False
         self.transient(parent)
@@ -36,23 +36,44 @@ class CleanupConfirmDialog(tk.Toplevel):
 
         # Warning
         warn = ttk.Label(self, text=t("hist.confirm_warning"),
-                         foreground="red", font=("", 11, "bold"), wraplength=660)
+                         foreground="red", font=("", 11, "bold"), wraplength=680)
         warn.pack(padx=10, pady=10)
 
         # Summary
         total_rows = sum(ti.get("estimated_rows", 0) for ti in table_infos)
         summary = ttk.LabelFrame(self, text=t("hist.confirm_info_group"))
         summary.pack(fill=tk.X, padx=10, pady=5)
-        for label, value in [
+
+        is_batch = len(campaign_ids) > 1
+        campaign_display = campaign_ids[0] if campaign_ids else ""
+        if is_batch:
+            campaign_display = f"{t('hist.campaign_multiple')}  ({len(campaign_ids)})"
+
+        rows_to_show = [
             (t("hist.confirm_db"), db_name),
-            (t("hist.confirm_campaign"), campaign_id),
+            (t("hist.confirm_campaign"), campaign_display),
             (t("hist.confirm_tables_count"), str(len(table_infos))),
-            (t("hist.confirm_total_rows"), str(total_rows)),
-        ]:
+            (t("hist.confirm_total_rows"), f"{total_rows:,}"),
+        ]
+        if is_batch:
+            rows_to_show.insert(2, (t("hist.confirm_campaigns_count"), str(len(campaign_ids))))
+
+        for label, value in rows_to_show:
             row = ttk.Frame(summary)
             row.pack(fill=tk.X, padx=5, pady=1)
             ttk.Label(row, text=label, width=20, anchor=tk.E).pack(side=tk.LEFT)
             ttk.Label(row, text=value).pack(side=tk.LEFT, padx=5)
+
+        if is_batch:
+            cid_list_frame = ttk.Frame(summary)
+            cid_list_frame.pack(fill=tk.X, padx=5, pady=2)
+            ttk.Label(cid_list_frame, text=t("hist.confirm_campaigns_list"),
+                      width=20, anchor=tk.NE).pack(side=tk.LEFT, anchor=tk.N)
+            lst = tk.Text(cid_list_frame, height=min(5, len(campaign_ids)),
+                          wrap=tk.WORD, font=("", 9))
+            lst.insert(tk.END, "\n".join(campaign_ids))
+            lst.config(state=tk.DISABLED)
+            lst.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
         # Per-table details (scrollable)
         canvas = tk.Canvas(self)
@@ -132,7 +153,9 @@ class HistoryPage(ttk.Frame):
 
         # Plans tab
         plans_frame = ttk.Frame(self._history_notebook)
-        self._plans_tree = self._make_tree(plans_frame, ("campaign", "db", "status", "time"))
+        self._plans_tree = self._make_tree(plans_frame,
+                                           ("campaign", "db", "status", "time"),
+                                           selectmode="extended")
         self._plans_tree.bind("<<TreeviewSelect>>", self._on_plan_clicked)
         self._history_notebook.add(plans_frame, text=t("hist.plans_tab"))
 
@@ -140,7 +163,8 @@ class HistoryPage(ttk.Frame):
         reports_frame = ttk.Frame(self._history_notebook)
         report_cols = ("time", "db", "table", "mode", "rows", "pk_col", "pk_start", "pk_end",
                        "campaign", "report", "cleanup")
-        self._reports_tree = self._make_tree(reports_frame, report_cols)
+        self._reports_tree = self._make_tree(reports_frame, report_cols,
+                                             selectmode="extended")
         self._reports_tree.bind("<<TreeviewSelect>>", self._on_report_clicked)
         self._history_notebook.add(reports_frame, text=t("hist.reports_tab"))
         # Store path data per report row
@@ -167,17 +191,33 @@ class HistoryPage(ttk.Frame):
         cleanup_frame2.pack(fill=tk.X, pady=3)
         self._cleanup_frame = cleanup_frame2
 
+        # Batch-selection hint
+        self._lbl_batch_hint = ttk.Label(cleanup_frame2, text=t("hist.batch_hint"),
+                                          foreground="#555", wraplength=900)
+        self._lbl_batch_hint.pack(fill=tk.X, padx=5, pady=(4, 0))
+
+        # Row 1: campaign_id + selected count
         row = ttk.Frame(cleanup_frame2)
         row.pack(fill=tk.X, padx=5, pady=5)
         self._lbl_campaign_id = ttk.Label(row, text=t("hist.campaign_id"))
         self._lbl_campaign_id.pack(side=tk.LEFT)
         self._campaign_var = tk.StringVar()
         ttk.Entry(row, textvariable=self._campaign_var, width=30).pack(side=tk.LEFT, padx=5)
+        self._lbl_selected_count = ttk.Label(row, text=t("hist.selected_count", n=0),
+                                              foreground="#06c")
+        self._lbl_selected_count.pack(side=tk.LEFT, padx=15)
 
+        # Row 2: action buttons
         btn_row = ttk.Frame(cleanup_frame2)
         btn_row.pack(fill=tk.X, padx=5, pady=3)
         self._btn_refresh = ttk.Button(btn_row, text=t("hist.refresh"), command=self.refresh)
         self._btn_refresh.pack(side=tk.LEFT, padx=3)
+        self._btn_select_all = ttk.Button(btn_row, text=t("hist.select_all"),
+                                           command=self._select_all_current_tab)
+        self._btn_select_all.pack(side=tk.LEFT, padx=3)
+        self._btn_deselect_all = ttk.Button(btn_row, text=t("hist.deselect_all"),
+                                             command=self._deselect_all)
+        self._btn_deselect_all.pack(side=tk.LEFT, padx=3)
         self._btn_dry_run = ttk.Button(btn_row, text=t("hist.dry_run"),
                                         command=lambda: self._run_cleanup(dry_run=True))
         self._btn_dry_run.pack(side=tk.LEFT, padx=3)
@@ -187,8 +227,9 @@ class HistoryPage(ttk.Frame):
 
         paned.add(bottom, weight=1)
 
-    def _make_tree(self, parent, columns) -> ttk.Treeview:
-        tree = ttk.Treeview(parent, columns=columns, show="headings", height=8)
+    def _make_tree(self, parent, columns, selectmode: str = "browse") -> ttk.Treeview:
+        tree = ttk.Treeview(parent, columns=columns, show="headings",
+                            height=8, selectmode=selectmode)
         for col in columns:
             tree.heading(col, text=col)
             tree.column(col, width=100)
@@ -204,10 +245,14 @@ class HistoryPage(ttk.Frame):
         self._history_notebook.tab(2, text=t("hist.cleanup_tab"))
         self._detail_frame.config(text=t("hist.detail"))
         self._cleanup_frame.config(text=t("hist.cleanup_ops"))
+        self._lbl_batch_hint.config(text=t("hist.batch_hint"))
         self._lbl_campaign_id.config(text=t("hist.campaign_id"))
         self._btn_refresh.config(text=t("hist.refresh"))
+        self._btn_select_all.config(text=t("hist.select_all"))
+        self._btn_deselect_all.config(text=t("hist.deselect_all"))
         self._btn_dry_run.config(text=t("hist.dry_run"))
         self._btn_execute_cleanup.config(text=t("hist.execute_cleanup"))
+        self._update_selection_count()
 
         plan_hdrs = [t("hist.col_campaign"), t("hist.col_db"), t("hist.col_status"), t("hist.col_time")]
         for col, hdr in zip(("campaign", "db", "status", "time"), plan_hdrs):
@@ -270,21 +315,27 @@ class HistoryPage(ttk.Frame):
 
     def _on_plan_clicked(self, event=None):
         sel = self._plans_tree.selection()
+        self._update_selection_count()
         if not sel:
             return
-        vals = self._plans_tree.item(sel[0], "values")
+        # Detail pane shows the last-clicked row; campaign field stays single unless multi-sel.
+        vals = self._plans_tree.item(sel[-1], "values")
         campaign_id = vals[0]
         plan_path = self.paths.plans_dir / f"campaign_{campaign_id}.json"
         if plan_path.exists():
             data = load_report(plan_path)
             self._set_detail(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+        if len(sel) == 1:
             self._campaign_var.set(campaign_id)
+        else:
+            self._campaign_var.set(t("hist.campaign_multiple"))
 
     def _on_report_clicked(self, event=None):
         sel = self._reports_tree.selection()
+        self._update_selection_count()
         if not sel:
             return
-        iid = sel[0]
+        iid = sel[-1]
         meta = self._report_data.get(iid, {})
         report_path = meta.get("report_path", "")
         cleanup_path = meta.get("cleanup_sql_path", "")
@@ -296,51 +347,143 @@ class HistoryPage(ttk.Frame):
             if cleanup_path:
                 lines.append(f"\n--- Cleanup SQL path ---\n{cleanup_path}")
             self._set_detail("\n".join(lines))
-        if campaign_id:
-            self._campaign_var.set(campaign_id)
+        # Collapse campaign_var to single id if all selected rows share one campaign.
+        if len(sel) == 1:
+            if campaign_id:
+                self._campaign_var.set(campaign_id)
+        else:
+            cids = {self._report_data.get(i, {}).get("campaign_id", "") for i in sel}
+            cids.discard("")
+            if len(cids) == 1:
+                self._campaign_var.set(next(iter(cids)))
+            else:
+                self._campaign_var.set(t("hist.campaign_multiple"))
 
     def _on_cleanup_sql_clicked(self, event=None):
         sel = self._cleanup_tree.selection()
+        self._update_selection_count()
         if not sel:
             return
-        vals = self._cleanup_tree.item(sel[0], "values")
+        vals = self._cleanup_tree.item(sel[-1], "values")
         cid = vals[0]
         sql_path = self.paths.cleanup_sql_dir / f"cleanup_{cid}.sql"
         if sql_path.exists():
             self._set_detail(sql_path.read_text(encoding="utf-8"))
             self._campaign_var.set(cid)
 
+    # ── Batch selection helpers ───────────────────────────────
+    def _current_tree(self) -> ttk.Treeview | None:
+        """Return the tree in the currently focused history tab."""
+        try:
+            idx = self._history_notebook.index(self._history_notebook.select())
+        except tk.TclError:
+            return None
+        return [self._plans_tree, self._reports_tree, self._cleanup_tree][idx] \
+            if 0 <= idx < 3 else None
+
+    def _select_all_current_tab(self):
+        tree = self._current_tree()
+        if tree is None:
+            return
+        tree.selection_set(tree.get_children())
+        self._update_selection_count()
+
+    def _deselect_all(self):
+        for tree in (self._plans_tree, self._reports_tree, self._cleanup_tree):
+            tree.selection_remove(tree.selection())
+        self._campaign_var.set("")
+        self._update_selection_count()
+
+    def _update_selection_count(self):
+        n = len(self._plans_tree.selection()) + len(self._reports_tree.selection())
+        self._lbl_selected_count.config(text=t("hist.selected_count", n=n))
+
+    def _collect_report_files(self) -> list:
+        """
+        Gather report JSON paths based on (in priority order):
+          1. Reports tab multi-selection (most granular)
+          2. Plans tab multi-selection (expands to all reports per campaign)
+          3. Campaign ID entered in the text box (single-campaign fallback)
+        """
+        from pathlib import Path
+
+        # 1. Reports tab selection
+        reports_sel = self._reports_tree.selection()
+        if reports_sel:
+            out = []
+            for iid in reports_sel:
+                rp = self._report_data.get(iid, {}).get("report_path", "")
+                if rp and Path(rp).exists():
+                    out.append(Path(rp))
+            return out
+
+        # 2. Plans tab selection
+        plans_sel = self._plans_tree.selection()
+        if plans_sel:
+            seen = set()
+            out = []
+            for iid in plans_sel:
+                vals = self._plans_tree.item(iid, "values")
+                if not vals:
+                    continue
+                cid = vals[0]
+                for rp in self.paths.reports_dir.glob(f"report_{cid}_*.json"):
+                    key = rp.resolve()
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(rp)
+            return out
+
+        # 3. Text box fallback
+        cid = self._campaign_var.get().strip()
+        if cid and cid != t("hist.campaign_multiple"):
+            return list(self.paths.reports_dir.glob(f"report_{cid}_*.json"))
+
+        return []
+
     def _run_cleanup(self, dry_run: bool):
-        campaign_id = self._campaign_var.get().strip()
-        if not campaign_id:
-            messagebox.showwarning(t("common.warning"), t("hist.no_campaign"))
+        report_files = self._collect_report_files()
+        if not report_files:
+            messagebox.showwarning(t("common.warning"), t("hist.no_selection"))
             return
 
-        sql_path = self.paths.cleanup_sql_dir / f"cleanup_{campaign_id}.sql"
-        if not sql_path.exists():
-            messagebox.showwarning(t("common.warning"), t("hist.no_sql", cid=campaign_id))
-            return
-
-        plan = CleanupPlan(campaign_id=campaign_id)
-        report_data_list = []
-        for report_file in self.paths.reports_dir.glob(f"report_{campaign_id}_*.json"):
-            data = load_report(report_file)
+        # Build plan from all gathered reports.
+        campaign_ids_seen: list[str] = []
+        report_data_list: list[dict] = []
+        targets: list[CleanupTarget] = []
+        for rp in report_files:
+            data = load_report(rp)
             table_name = data.get("table_name", "")
             pk_start = data.get("pk_range_start", "")
             pk_end = data.get("pk_range_end", "")
             pk_cols = data.get("pk_columns", [])
             pk_column = pk_cols[0] if pk_cols else ""
+            cid = data.get("campaign_id", "")
+            if cid and cid not in campaign_ids_seen:
+                campaign_ids_seen.append(cid)
             if table_name and pk_start and pk_end and pk_column:
-                plan.add_target(CleanupTarget(
+                targets.append(CleanupTarget(
                     table_name=table_name, pk_column=pk_column,
                     pk_range_start=pk_start, pk_range_end=pk_end,
-                    campaign_id=campaign_id,
+                    campaign_id=cid,
                 ))
                 report_data_list.append(data)
 
-        if not plan.targets:
+        if not targets:
             messagebox.showwarning(t("common.warning"), t("hist.no_targets"))
             return
+
+        # Plan-level campaign_id: single cid if all targets share one, otherwise
+        # a synthetic batch id so the cleanup report file has a unique name.
+        if len(campaign_ids_seen) == 1:
+            plan_cid = campaign_ids_seen[0]
+        else:
+            from datetime import datetime as _dt
+            plan_cid = f"batch_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+
+        plan = CleanupPlan(campaign_id=plan_cid)
+        for tg in targets:
+            plan.add_target(tg)
 
         conn_config: ConnectionConfig | None = self.main_window.conn_config
         if conn_config is None:
@@ -351,7 +494,7 @@ class HistoryPage(ttk.Frame):
         if report_data_list:
             db_name = report_data_list[0].get("db_name", db_name) or db_name
 
-        # Build per-table info
+        # Build per-table info with one shared connection.
         table_infos = []
         from src.db.connection import DatabaseManager
         _db = DatabaseManager(config=conn_config)
@@ -368,12 +511,13 @@ class HistoryPage(ttk.Frame):
                 }
                 if db_connected:
                     try:
-                        where = target.build_where_clause()
+                        where = target.build_where_clause(_db.dialect_name)
+                        qt = _db.quote_identifier(target.table_name)
                         count_rows = _db.query(
-                            f"SELECT COUNT(*) FROM `{target.table_name}` WHERE {where}")
+                            f"SELECT COUNT(*) FROM {qt} WHERE {where}")
                         ti["estimated_rows"] = int(count_rows[0][0]) if count_rows else 0
                         ti["sample_rows"] = _db.query_dicts(
-                            f"SELECT * FROM `{target.table_name}` WHERE {where} LIMIT 5")
+                            f"SELECT * FROM {qt} WHERE {where} LIMIT 5")
                     except Exception:
                         pass
                 table_infos.append(ti)
@@ -384,7 +528,8 @@ class HistoryPage(ttk.Frame):
         # Confirmation dialog for non-dry-run
         if not dry_run:
             dlg = CleanupConfirmDialog(self, db_name=db_name,
-                                        campaign_id=campaign_id, table_infos=table_infos)
+                                        campaign_ids=campaign_ids_seen or [plan_cid],
+                                        table_infos=table_infos)
             if not dlg.show():
                 return
 

@@ -1,12 +1,17 @@
-# MySQL Data Factory 3.0.1
+# MySQL Data Factory 3.0.2
+
+![version](https://img.shields.io/badge/version-3.0.2-blue)
+![python](https://img.shields.io/badge/python-3.11-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
+![platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 MySQL Data Factory is an offline-friendly MySQL test-data append tool for bastion-host environments. It ships as source code plus a prebuilt embeddable Python runtime archive, so the target machine only needs to unpack the project and run `bin\setup_offline.bat`.
 
-The 3.0.1 line keeps the multi-table workflow and cleanup safety from 2.x, but removes the heavy PySide6/conda-pack path. The GUI is now `tkinter`, the offline runtime is a compact zip, and the batch insertion pipeline streams chunk files instead of holding the full campaign in memory.
+The 3.0.2 line keeps the multi-table workflow and cleanup safety from 2.x, but removes the heavy PySide6/conda-pack path. The GUI is now `tkinter`, the offline runtime is a compact zip, and the batch insertion pipeline streams chunk files instead of holding the full campaign in memory.
 
 ---
 
-## 3.0.1 Highlights
+## 3.0.2 Highlights
 
 - `tkinter` GUI: no external GUI framework dependency, still keeps the 6-tab workflow
 - Portable offline package: `env_export/mysql_factory_env.zip` is the official deployment artifact
@@ -50,14 +55,21 @@ bin\run_gui.bat
 
 ## Quick Start
 
-### Local Development
+Pick one of the two entry points:
+
+### Local development (online machine)
+
+> Use this if you have internet and just want to try the tool locally.
 
 ```bash
 python scripts/ui_app.py
+# or use the CLI wizard
 python scripts/wizard.py --env-file .env
 ```
 
-### Bastion Host / Offline Machine
+### Bastion host / offline machine (official path)
+
+> Use this for the intended deployment: no network on target, bundled runtime.
 
 ```batch
 bin\setup_offline.bat
@@ -66,11 +78,7 @@ bin\test_connection.bat
 bin\run_gui.bat
 ```
 
-If you prefer CLI:
-
-```batch
-bin\run_wizard.bat
-```
+Prefer CLI over GUI on the bastion? Use `bin\run_wizard.bat`.
 
 ---
 
@@ -120,14 +128,14 @@ mysql-data-factory/
 
 ## Documentation
 
-| Document | Purpose |
-|---|---|
-| [QUICKSTART.md](QUICKSTART.md) | Fast 5-minute usage path |
-| [DEPLOYMENT.md](DEPLOYMENT.md) | Offline deployment and bastion-host usage |
-| [USER_GUIDE_3.0.md](USER_GUIDE_3.0.md) | GUI and CLI workflow reference |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Module layout and data flow |
-| [RELEASE_NOTES_3.0.md](RELEASE_NOTES_3.0.md) | What changed in the 3.0.1 release |
-| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Release validation checklist |
+| Document | Purpose | Audience |
+|---|---|---|
+| [QUICKSTART.md](QUICKSTART.md) | Fast 5-minute usage path | First-time users |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Offline deployment and bastion-host usage | Ops / on-site engineers |
+| [USER_GUIDE_3.0.md](USER_GUIDE_3.0.md) | GUI and CLI workflow reference | Daily users |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Module layout and data flow | Contributors |
+| [RELEASE_NOTES_3.0.md](RELEASE_NOTES_3.0.md) | What changed in the 3.0.2 release | All users |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Release validation checklist | Maintainers |
 
 ---
 
@@ -150,8 +158,8 @@ mysql-data-factory/
 
 ## Versioning
 
-- User-facing release name: `3.0.1`
-- Semantic version / Git tag: `v3.0.1`
+- User-facing release name: `3.0.2`
+- Semantic version / Git tag: `v3.0.2`
 
 ---
 

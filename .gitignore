@@ -29,8 +29,10 @@ MANIFEST
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
+#  We hand-maintain mysql_factory.spec, so keep it tracked.
 *.manifest
 *.spec
+!mysql_factory.spec
 
 # Installer logs
 pip-log.txt
@@ -213,7 +215,7 @@ marimo/_lsp/
 __marimo__/
 
 # ==============================================
-# MySQL Data Factory 3.00 - Project-specific
+# MySQL Data Factory 3.0.2 - Project-specific
 # ==============================================
 
 # Data output directories (generated at runtime — keep dir skeleton via .gitkeep)

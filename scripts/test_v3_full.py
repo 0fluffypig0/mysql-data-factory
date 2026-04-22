@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 3.0 — Full Integration Test
+MySQL Data Factory 3.0.2 — Full Integration Test
 
 Tests:
 1. Database connection + schema scan
@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src import __version__
 from src.config.app_config import AppPaths, ConnectionConfig
 from src.db.connection import DatabaseManager
 from src.metadata.scanner import scan_database
@@ -65,7 +66,7 @@ def main():
     start_time = time.monotonic()
 
     print("=" * 70)
-    print("MySQL Data Factory 3.0 — Full Integration Test")
+    print(f"MySQL Data Factory {__version__} — Full Integration Test")
     print(f"Tables: {len(TEST_TABLES)}")
     print(f"Rows per table: {ROWS_PER_TABLE:,}")
     print(f"Total rows: {ROWS_PER_TABLE * len(TEST_TABLES):,}")

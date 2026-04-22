@@ -107,10 +107,12 @@ def _check_range_conflict(db: DatabaseManager, table_name: str, pk_column: str,
     )
 
     try:
+        qt = db.quote_identifier(table_name)
+        qc = db.quote_identifier(pk_column)
         # Use COUNT + BETWEEN for efficiency
         sql_count = (
-            f"SELECT COUNT(*) FROM `{table_name}` "
-            f"WHERE `{pk_column}` BETWEEN %s AND %s"
+            f"SELECT COUNT(*) FROM {qt} "
+            f"WHERE {qc} BETWEEN %s AND %s"
         )
         rows = db.query(sql_count, (first_val, last_val))
         count = int(rows[0][0]) if rows else 0
@@ -119,9 +121,9 @@ def _check_range_conflict(db: DatabaseManager, table_name: str, pk_column: str,
         if count > 0:
             # Get sample conflicting values
             sql_sample = (
-                f"SELECT `{pk_column}` FROM `{table_name}` "
-                f"WHERE `{pk_column}` BETWEEN %s AND %s "
-                f"ORDER BY `{pk_column}` LIMIT 10"
+                f"SELECT {qc} FROM {qt} "
+                f"WHERE {qc} BETWEEN %s AND %s "
+                f"ORDER BY {qc} LIMIT 10"
             )
             sample_rows = db.query(sql_sample, (first_val, last_val))
             info.conflict_samples = [str(r[0]) for r in sample_rows]

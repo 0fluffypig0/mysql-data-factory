@@ -1,7 +1,7 @@
 """
 Timezone utilities.
 
-All timestamps in MySQL Data Factory 3.00 use Asia/Tokyo (JST).
+All timestamps in MySQL Data Factory 3.0.2 use Asia/Tokyo (JST).
 """
 
 from __future__ import annotations

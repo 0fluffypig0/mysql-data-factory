@@ -15,8 +15,9 @@ from src.metadata.models import DatabaseScanResult, TableMetadata
 from src.plan.models import CampaignPlan, TaskItem
 from src.strategy.pk_planner import PKRangeConfig
 from src.ui.i18n import t
+from src.utils.runtime_paths import get_app_root
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = get_app_root()
 _TEMPLATE_DIR = _PROJECT_ROOT / "task_templates"
 
 

@@ -717,9 +717,21 @@ def is_retryable_connection_error(exc: Exception) -> bool:
     if any(keyword in message for keyword in retryable_keywords):
         return True
 
-    # 再进一步，如果环境里有 pymysql，则尝试用异常类型判断
+    # 再进一步：SQLAlchemy 包装后的异常保留原始 DB-API 错误在 .orig 上；
+    # pymysql 和 sqlite3 的连接类错误都会浮现到 DBAPIError.connection_invalidated。
     try:
-        import pymysql
+        from sqlalchemy.exc import DBAPIError, OperationalError, InterfaceError
+
+        if isinstance(exc, (OperationalError, InterfaceError)):
+            return True
+        if isinstance(exc, DBAPIError) and getattr(exc, "connection_invalidated", False):
+            return True
+    except Exception:
+        pass
+
+    # 兜底：旧路径可能直接抛出 pymysql 原生异常
+    try:
+        import pymysql  # type: ignore
 
         if isinstance(exc, (pymysql.err.InterfaceError, pymysql.err.OperationalError)):
             return True

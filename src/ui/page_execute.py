@@ -160,7 +160,9 @@ class ExecutePage(ttk.Frame):
         self._lbl_eta.config(text=f"ETA: {snap.eta_str()}")
 
     def start_execution(self, plan: CampaignPlan, conn_config: ConnectionConfig,
-                        scan_result: DatabaseScanResult | None):
+                        scan_result: DatabaseScanResult | None,
+                        insert_mode: str = "insert",
+                        keep_chunks: bool = True):
         self._lbl_status.config(text=t("exec.running", cid=plan.campaign_id))
         self._progress_var.set(0)
         for item in self._result_tree.get_children():
@@ -169,7 +171,8 @@ class ExecutePage(ttk.Frame):
         self._log_text.delete("1.0", tk.END)
         self._log_text.config(state=tk.DISABLED)
         self._btn_stop.config(state=tk.NORMAL)
-        self._log(f"[{now_jst_str()}] Starting campaign {plan.campaign_id}")
+        mode_label = "LOAD DATA LOCAL" if insert_mode == "load_data" else "INSERT"
+        self._log(f"[{now_jst_str()}] Starting campaign {plan.campaign_id} (mode={mode_label})")
 
         paths = AppPaths()
         session = self.main_window.session
@@ -183,6 +186,8 @@ class ExecutePage(ttk.Frame):
                     progress_callback=self._on_progress_thread,
                     db=shared_db,
                     detail_callback=self._on_detail_thread,
+                    insert_mode=insert_mode,
+                    keep_chunks=keep_chunks,
                 )
                 self.after(0, lambda: self._on_finished(result))
             except Exception as exc:

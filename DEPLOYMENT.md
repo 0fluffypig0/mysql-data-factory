@@ -1,6 +1,6 @@
-# MySQL Data Factory 3.0.1 — Deployment Guide
+# MySQL Data Factory 3.0.2 — Deployment Guide
 
-This guide describes the release model used by 3.0.1:
+This guide describes the release model used by 3.0.2:
 
 - keep the project source code
 - keep `env_export\mysql_factory_env.zip`
@@ -52,7 +52,7 @@ env_export/
 
 ### When You Do Not Need to Rebuild the Runtime
 
-If you only changed application code or docs, you can usually publish source updates without regenerating the archive. For the 3.0.1 release, the archive is already prepared and intended to travel together with the source tree.
+If you only changed application code or docs, you can usually publish source updates without regenerating the archive. For the 3.0.2 release, the archive is already prepared and intended to travel together with the source tree.
 
 ---
 
@@ -117,7 +117,7 @@ bin\run_wizard.bat
 
 ## Project-Relative Runtime Model
 
-3.0.1 installs the runtime under the project directory instead of a global path like `C:\tools\...`.
+3.0.2 installs the runtime under the project directory instead of a global path like `C:\tools\...`.
 
 Benefits:
 
@@ -201,7 +201,7 @@ Check:
 
 ## Release Recommendation
 
-For 3.0.1, treat the following as the official release payload:
+For 3.0.2, treat the following as the official release payload:
 
 1. project source tree
 2. `env_export\mysql_factory_env.zip`

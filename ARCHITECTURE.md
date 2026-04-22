@@ -1,8 +1,8 @@
-# MySQL Data Factory 3.0.1 — Architecture
+# MySQL Data Factory 3.0.2 — Architecture
 
 ## Overview
 
-MySQL Data Factory 3.0.1 is built for one practical goal: append large volumes of test data into real MySQL schemas from restricted environments without dragging along a heavy runtime.
+MySQL Data Factory 3.0.2 is built for one practical goal: append large volumes of test data into real MySQL schemas from restricted environments without dragging along a heavy runtime.
 
 The release is centered on three architectural shifts:
 
@@ -80,7 +80,7 @@ The planner supports integer, zero-padded string, and prefix-plus-number PK shap
 
 ### 5. Streaming Batch Insert
 
-`src/execute/batch_runner.py` reads one chunk file at a time and breaks it into insert batches. The important 3.0.1 behavior is that it no longer builds an in-memory list of every generated row before insert. That change is what keeps million-row campaigns within low double-digit MB memory usage on the Python side.
+`src/execute/batch_runner.py` reads one chunk file at a time and breaks it into insert batches. The important 3.0.2 behavior is that it no longer builds an in-memory list of every generated row before insert. That change is what keeps million-row campaigns within low double-digit MB memory usage on the Python side.
 
 ### 6. Reporting and Cleanup
 
@@ -98,7 +98,7 @@ The planner supports integer, zero-padded string, and prefix-plus-number PK shap
 
 The GUI lives under `src/ui/` and is now a pure `tkinter` application.
 
-Key conversions in 3.0.1:
+Key conversions in 3.0.2:
 
 - `MainWindow` wraps `tk.Tk()` instead of `QMainWindow`
 - background work uses `threading.Thread` with `widget.after(...)` callbacks instead of Qt threads/signals

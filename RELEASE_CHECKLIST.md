@@ -1,4 +1,4 @@
-# MySQL Data Factory 3.0.1 — Release Checklist
+# MySQL Data Factory 3.0.2 — Release Checklist
 
 Use this checklist before publishing a new 3.x release.
 
@@ -58,9 +58,9 @@ Use this checklist before publishing a new 3.x release.
 
 ## Versioning
 
-- [ ] user-facing release version is `3.0.1`
-- [ ] package semantic version is `3.0.1`
-- [ ] Git tag prepared: `v3.0.1`
+- [ ] user-facing release version is `3.0.2`
+- [ ] package semantic version is `3.0.2`
+- [ ] Git tag prepared: `v3.0.2`
 
 ---
 
@@ -71,7 +71,7 @@ Use this checklist before publishing a new 3.x release.
 - [ ] offline install path verified
 - [ ] cleanup safety verified
 - [ ] ready to push `main`
-- [ ] ready to push tag `v3.0.1`
+- [ ] ready to push tag `v3.0.2`
 
 
 

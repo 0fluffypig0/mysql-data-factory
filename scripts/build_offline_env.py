@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 3.0 — 离线环境构建脚本。
+MySQL Data Factory 3.0.2 — 离线环境构建脚本。
 
 当前方案：
 1. 下载 Python Embeddable Package (Windows x64)
@@ -260,7 +260,7 @@ def copy_tk_assets(source_python: Path, target_python_dir: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build offline deployment package for mysql-data-factory 3.0.",
+        description="Build offline deployment package for mysql-data-factory 3.0.2.",
     )
     parser.add_argument(
         "--python-version",

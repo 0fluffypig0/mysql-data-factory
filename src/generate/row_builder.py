@@ -111,32 +111,36 @@ def resolve_start_values(
 
             # If value matches prefix+number pattern (e.g. "SEED_t_pub_lo_0001", "KC0007"),
             # count ALL rows sharing the same prefix so we start after the existing maximum.
+            qt = db.quote_identifier(table_name)
+            qc = db.quote_identifier(column)
+
+            # Use '!' as the LIKE escape char instead of backslash so the same
+            # query works on both MySQL (which would interpret '\\' in SQL
+            # string literals) and SQLite (which requires a 1-char ESCAPE
+            # arg). '!' is not a SQL-level escape on either engine.
+            ESC = "!"
+
+            def _esc_like(s: str) -> str:
+                return (s.replace(ESC, ESC + ESC)
+                         .replace("%", ESC + "%")
+                         .replace("_", ESC + "_"))
+
             m = PREFIX_NUM_RE.match(str_val)
             if m:
                 prefix = m.group(1)
-                escaped_prefix = (
-                    prefix
-                    .replace("\\", "\\\\")
-                    .replace("%", "\\%")
-                    .replace("_", "\\_")
-                )
-                like_pattern = f"{escaped_prefix}%"
+                like_pattern = f"{_esc_like(prefix)}%"
                 rows = db.query(
-                    f"SELECT COUNT(*) FROM `{table_name}` WHERE `{column}` LIKE %s ESCAPE '\\\\'",
+                    f"SELECT COUNT(*) FROM {qt} WHERE {qc} LIKE %s ESCAPE '{ESC}'",
                     (like_pattern,),
                 )
                 count = int(rows[0][0]) if rows else 0
                 start_values[column] = count + 1
             else:
                 # Non-prefix+number string: look for variants appended with _<suffix>
-                escaped = str_val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                like_pattern = f"{escaped}\\_%"
+                like_pattern = f"{_esc_like(str_val)}{ESC}_%"
                 rows = db.query(
-                    f"""
-                    SELECT COUNT(*)
-                    FROM `{table_name}`
-                    WHERE `{column}` = %s OR `{column}` LIKE %s ESCAPE '\\\\'
-                    """,
+                    f"SELECT COUNT(*) FROM {qt} "
+                    f"WHERE {qc} = %s OR {qc} LIKE %s ESCAPE '{ESC}'",
                     (str_val, like_pattern),
                 )
                 count = int(rows[0][0]) if rows else 0
@@ -167,11 +171,13 @@ def generate_to_chunks(
     marker_value: str = "",
     progress_callback=None,
     pk_columns_for_filename: list[str] | None = None,
+    file_format: str = "csv",
 ) -> list[Path]:
     """
-    Generate rows in chunks and write to CSV files.
+    Generate rows in chunks and write to CSV or TSV files.
 
     pk_columns_for_filename: if provided, first column is used to embed PK range in chunk filenames.
+    file_format: "csv" (default, for INSERT path) or "tsv" (MySQL-native LOAD DATA format).
     Returns list of generated chunk file paths.
     """
     chunk_size = min(chunk_size, MAX_CHUNK_SIZE)
@@ -180,6 +186,11 @@ def generate_to_chunks(
 
     # The key column for embedding range in the filename
     _pk_name_col = (pk_columns_for_filename or pk_columns or [None])[0]
+
+    fmt = (file_format or "csv").lower()
+    if fmt not in ("csv", "tsv"):
+        fmt = "csv"
+    ext = "tsv" if fmt == "tsv" else "csv"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     total_chunks = math.ceil(total_rows / chunk_size)
@@ -206,12 +217,15 @@ def generate_to_chunks(
         if _pk_name_col and rows:
             pk_first = _safe_pk_token(rows[0].get(_pk_name_col, ""))
             pk_last = _safe_pk_token(rows[-1].get(_pk_name_col, ""))
-            chunk_name = f"chunk_{chunk_idx:06d}__rows_{current_count}__range_{pk_first}__{pk_last}.csv"
+            chunk_name = f"chunk_{chunk_idx:06d}__rows_{current_count}__range_{pk_first}__{pk_last}.{ext}"
         else:
-            chunk_name = f"chunk_{chunk_idx:06d}.csv"
+            chunk_name = f"chunk_{chunk_idx:06d}.{ext}"
 
         chunk_path = output_dir / chunk_name
-        _write_csv(chunk_path, template_fieldnames, rows)
+        if fmt == "tsv":
+            _write_load_data_tsv(chunk_path, template_fieldnames, rows)
+        else:
+            _write_csv(chunk_path, template_fieldnames, rows)
         chunk_files.append(chunk_path)
 
         if progress_callback:
@@ -219,7 +233,7 @@ def generate_to_chunks(
 
         logger.info(f"Chunk {chunk_idx}/{total_chunks}: {chunk_path.name} ({current_count} rows)")
 
-    logger.success(f"Generated {generated_total} rows in {total_chunks} chunks")
+    logger.success(f"Generated {generated_total} rows in {total_chunks} chunks (format={fmt})")
     return chunk_files
 
 
@@ -261,3 +275,46 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) ->
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+def _escape_tsv_value(value: Any) -> str:
+    r"""
+    Encode a single cell for MySQL-native TSV (LOAD DATA LOCAL INFILE).
+
+    Rules:
+    - None or empty string -> \N  (SQL NULL literal under unquoted fields)
+    - Escape backslash, tab, newline, carriage return
+    - No surrounding quotes (MySQL default tab-terminated format)
+    """
+    if value is None:
+        return "\\N"
+    s = str(value)
+    if s == "":
+        return "\\N"
+    # Order matters: backslash first so we don't double-escape our own escapes
+    s = s.replace("\\", "\\\\")
+    s = s.replace("\t", "\\t")
+    s = s.replace("\n", "\\n")
+    s = s.replace("\r", "\\r")
+    return s
+
+
+def _write_load_data_tsv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+    r"""
+    Write rows in MySQL-native TSV format for LOAD DATA LOCAL INFILE.
+
+    Format:
+      - No header row (LOAD DATA expects raw data)
+      - Tab-separated fields
+      - \N marks NULL (also used when source value is empty string,
+        matching INSERT path's _normalize_value behavior)
+      - \\ \t \n \r escape sequences
+      - utf-8 encoding (no BOM — MySQL cannot strip a UTF-8 BOM automatically)
+      - LF line endings
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        for row in rows:
+            cells = [_escape_tsv_value(row.get(col, "")) for col in fieldnames]
+            f.write("\t".join(cells))
+            f.write("\n")

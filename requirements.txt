@@ -1,4 +1,16 @@
 pymysql==1.1.2
+# Required by pymysql for MySQL 8.0+ caching_sha2_password auth (default).
+# Without it, connections to fresh MySQL 8.0 servers fail with:
+#   'cryptography' package is required for sha256_password or
+#   caching_sha2_password auth methods
+cryptography
+# PostgreSQL driver. The -binary variant bundles libpq so users on Windows /
+# offline bastion hosts don't need a system Postgres install.
+psycopg2-binary
+# Oracle driver — "oracledb" (successor to cx_Oracle). Defaults to "thin"
+# mode which is pure Python, so the bastion host does NOT need Oracle
+# Instant Client installed. Required for Oracle 12c+.
+oracledb
 sqlalchemy
 python-dotenv==1.2.2
 loguru==0.7.3

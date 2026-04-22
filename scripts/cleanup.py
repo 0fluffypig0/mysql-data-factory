@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MySQL Data Factory 3.00 - Cleanup CLI
+MySQL Data Factory 3.0.2 - Cleanup CLI
 
 Delete test data by campaign_id, PK range, or marker column.
 
@@ -21,6 +21,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src import __version__
+
 
 def parse_args():
     env_parser = argparse.ArgumentParser(add_help=False)
@@ -30,24 +32,57 @@ def parse_args():
     from src.config.app_config import load_dotenv_file
     load_dotenv_file(env_args.env_file)
 
-    parser = argparse.ArgumentParser(description="Cleanup test data")
-    parser.add_argument("--env-file", default=env_args.env_file)
+    parser = argparse.ArgumentParser(
+        description=f"MySQL Data Factory {__version__} - Cleanup test data "
+                    "(delete by campaign-id, table PK range, or marker column)"
+    )
+    parser.add_argument(
+        "--env-file",
+        default=env_args.env_file,
+        help="Path to .env file with DB credentials (default: .env in project root)",
+    )
 
     # Target selection
-    parser.add_argument("--campaign-id", help="Campaign ID to clean up")
-    parser.add_argument("--table", help="Single table to clean up")
-    parser.add_argument("--pk-column", help="PK column name")
-    parser.add_argument("--pk-start", help="PK range start")
-    parser.add_argument("--pk-end", help="PK range end")
-    parser.add_argument("--marker-column", help="Marker column name")
-    parser.add_argument("--marker-value", help="Marker column value")
+    parser.add_argument(
+        "--campaign-id",
+        help="Campaign ID to clean up. Reads reports/report_<id>_*.json "
+             "and deletes by the recorded PK range. Preferred cleanup path.",
+    )
+    parser.add_argument(
+        "--table",
+        help="Single table to clean up (use with --pk-* or --marker-* for the filter).",
+    )
+    parser.add_argument(
+        "--pk-column",
+        help="PK column name. Auto-filled from metadata cache if omitted.",
+    )
+    parser.add_argument("--pk-start", help="PK range start (inclusive).")
+    parser.add_argument("--pk-end", help="PK range end (inclusive).")
+    parser.add_argument(
+        "--marker-column",
+        help="Marker column name (e.g. a flag column used to tag test rows).",
+    )
+    parser.add_argument("--marker-value", help="Value in the marker column to match.")
 
     # Mode
-    parser.add_argument("--dry-run", action="store_true", default=True, help="Count only (default)")
-    parser.add_argument("--execute", action="store_true", help="Actually delete")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Count matching rows without deleting (default).",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually delete the rows. Prompts for [y/N] confirmation.",
+    )
 
     # Output
-    parser.add_argument("--sql-only", action="store_true", help="Only generate SQL, don't run anything")
+    parser.add_argument(
+        "--sql-only",
+        action="store_true",
+        help="Generate cleanup SQL to sql/cleanup/ and exit; run nothing against the DB.",
+    )
 
     return parser.parse_args()
 

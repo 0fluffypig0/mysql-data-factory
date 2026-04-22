@@ -165,10 +165,12 @@ def check_pk_conflict(db, table_name: str, pk_column: str,
     Returns list of conflicting values.
     """
     conflicts = []
+    qt = db.quote_identifier(table_name)
+    qc = db.quote_identifier(pk_column)
     for i in range(0, len(planned_values), batch_size):
         batch = planned_values[i:i + batch_size]
         placeholders = ",".join(["%s"] * len(batch))
-        sql = f"SELECT `{pk_column}` FROM `{table_name}` WHERE `{pk_column}` IN ({placeholders})"
+        sql = f"SELECT {qc} FROM {qt} WHERE {qc} IN ({placeholders})"
         rows = db.query(sql, tuple(batch))
         conflicts.extend(str(row[0]) for row in rows)
 

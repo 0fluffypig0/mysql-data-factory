@@ -8,7 +8,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from src.config.app_config import ConnectionConfig
+from src.config.app_config import AppPaths, ConnectionConfig
+from src.execute.estimator import CampaignEstimate, estimate_campaign
 from src.execute.preflight import run_preflight_check
 from src.generate.row_builder import generate_preview, resolve_start_values
 from src.metadata.models import DatabaseScanResult
@@ -16,6 +17,111 @@ from src.plan.models import CampaignPlan, TaskItem
 from src.sample.selector import normalize_sample_for_csv, select_by_pk, select_top_rows
 from src.ui.i18n import t
 from src.ui.session import SessionManager
+
+
+def _fmt_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    for unit, denom in [("KB", 1024), ("MB", 1024**2), ("GB", 1024**3), ("TB", 1024**4)]:
+        if n < denom * 1024:
+            return f"{n / denom:.2f} {unit}"
+    return f"{n / (1024 ** 4):.2f} TB"
+
+
+def _fmt_seconds(s: float) -> str:
+    if s < 1:
+        return "<1 s"
+    if s < 60:
+        return f"{s:.1f} s"
+    if s < 3600:
+        return f"{s / 60:.1f} min"
+    return f"{s / 3600:.2f} h"
+
+
+class EstimationDialog(tk.Toplevel):
+    """Read-only pre-execution estimate: rows / CSV footprint / time / disk."""
+
+    def __init__(self, parent, estimate: CampaignEstimate):
+        super().__init__(parent)
+        self.title(t("preview.est_dialog_title"))
+        self.geometry("860x580")
+        self.transient(parent)
+        self.grab_set()
+
+        # ── Overall summary ──
+        summary = ttk.LabelFrame(self, text=t("preview.est_summary"))
+        summary.pack(fill=tk.X, padx=10, pady=5)
+        for label, value in [
+            (t("preview.est_total_rows"), f"{estimate.total_rows:,}"),
+            (t("preview.est_total_size"), _fmt_bytes(estimate.total_csv_bytes)),
+            (t("preview.est_peak_chunk"), _fmt_bytes(estimate.peak_chunk_bytes)),
+            (t("preview.est_time"),
+             f"{_fmt_seconds(estimate.total_seconds_est)}   "
+             f"({t('preview.est_rate_note', rate=f'{estimate.insert_rate:,}')})"),
+        ]:
+            r = ttk.Frame(summary)
+            r.pack(fill=tk.X, padx=5, pady=1)
+            ttk.Label(r, text=label, width=22, anchor=tk.E).pack(side=tk.LEFT)
+            ttk.Label(r, text=value).pack(side=tk.LEFT, padx=5)
+
+        # ── Disk panel ──
+        disk = ttk.LabelFrame(self, text=t("preview.est_disk"))
+        disk.pack(fill=tk.X, padx=10, pady=5)
+        if estimate.disk_total_bytes == 0:
+            ttk.Label(disk, text=t("preview.est_disk_unknown")).pack(padx=5, pady=5)
+        else:
+            if estimate.total_csv_bytes > estimate.disk_free_bytes:
+                color, msg = "red", t("preview.est_disk_red")
+            elif estimate.disk_warn:
+                color, msg = "#b35900", t("preview.est_disk_yellow")
+            else:
+                color, msg = "#006400", t("preview.est_disk_green")
+
+            for label, value in [
+                (t("preview.est_disk_path"), estimate.disk_check_path),
+                (t("preview.est_disk_free"), _fmt_bytes(estimate.disk_free_bytes)),
+                (t("preview.est_disk_need"), _fmt_bytes(estimate.total_csv_bytes)),
+            ]:
+                r = ttk.Frame(disk)
+                r.pack(fill=tk.X, padx=5, pady=1)
+                ttk.Label(r, text=label, width=22, anchor=tk.E).pack(side=tk.LEFT)
+                ttk.Label(r, text=value).pack(side=tk.LEFT, padx=5)
+            ttk.Label(disk, text=msg, foreground=color,
+                      font=("", 10, "bold"), wraplength=820).pack(padx=5, pady=6)
+
+        # ── Per-table breakdown ──
+        table_frame = ttk.LabelFrame(self, text=t("preview.est_per_table"))
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        cols = ("table", "rows", "bpr", "total", "chunks", "peak", "time")
+        widths = {"table": 220, "rows": 80, "bpr": 90,
+                  "total": 110, "chunks": 70, "peak": 110, "time": 90}
+        tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=10)
+        for c in cols:
+            tree.heading(c, text=t(f"preview.est_col_{c}"))
+            tree.column(c, width=widths[c],
+                        anchor=tk.W if c == "table" else tk.E)
+        for te in estimate.tasks:
+            if te.error:
+                tree.insert("", tk.END, values=(
+                    te.table_name, f"{te.row_count:,}",
+                    "-", te.error, "-", "-", "-"))
+            else:
+                tree.insert("", tk.END, values=(
+                    te.table_name,
+                    f"{te.row_count:,}",
+                    _fmt_bytes(te.avg_bytes_per_row),
+                    _fmt_bytes(te.total_csv_bytes),
+                    f"{te.chunks:,}",
+                    _fmt_bytes(te.peak_chunk_bytes),
+                    _fmt_seconds(te.seconds_est),
+                ))
+        sb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        ttk.Button(self, text=t("preview.est_close"),
+                   command=self.destroy).pack(pady=8)
 
 
 class PreviewPage(ttk.Frame):
@@ -35,16 +141,50 @@ class PreviewPage(ttk.Frame):
         self._notebook = ttk.Notebook(self)
         self._notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
+        # Insert options: fast mode + keep chunks
+        opts_frame = ttk.Frame(self)
+        opts_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
+        self._fast_mode_var = tk.BooleanVar(value=False)
+        self._keep_chunks_var = tk.BooleanVar(value=True)
+        self._chk_fast_mode = ttk.Checkbutton(
+            opts_frame, text=t("preview.fast_mode"),
+            variable=self._fast_mode_var, command=self._on_fast_mode_toggle,
+        )
+        self._chk_fast_mode.pack(side=tk.LEFT, padx=3)
+        self._chk_keep_chunks = ttk.Checkbutton(
+            opts_frame, text=t("preview.keep_chunks"),
+            variable=self._keep_chunks_var,
+        )
+        self._chk_keep_chunks.pack(side=tk.LEFT, padx=10)
+        self._lbl_fast_mode_hint = ttk.Label(
+            opts_frame, text=t("preview.fast_mode_hint"), foreground="#666666",
+        )
+        self._lbl_fast_mode_hint.pack(side=tk.LEFT, padx=10)
+        # keep-chunks option is only meaningful in fast mode
+        self._chk_keep_chunks.state(["disabled"])
+
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, padx=10, pady=5)
         self._btn_refresh = ttk.Button(btn_frame, text=t("preview.refresh"), command=self._refresh_preview)
         self._btn_refresh.pack(side=tk.LEFT, padx=3)
+        self._btn_estimate = ttk.Button(btn_frame, text=t("preview.estimate"), command=self._estimate)
+        self._btn_estimate.pack(side=tk.LEFT, padx=3)
         self._btn_execute = ttk.Button(btn_frame, text=t("preview.execute"), command=self._execute)
         self._btn_execute.pack(side=tk.LEFT, padx=3)
 
+    def _on_fast_mode_toggle(self):
+        if self._fast_mode_var.get():
+            self._chk_keep_chunks.state(["!disabled"])
+        else:
+            self._chk_keep_chunks.state(["disabled"])
+
     def retranslate(self):
         self._btn_refresh.config(text=t("preview.refresh"))
+        self._btn_estimate.config(text=t("preview.estimate"))
         self._btn_execute.config(text=t("preview.execute"))
+        self._chk_fast_mode.config(text=t("preview.fast_mode"))
+        self._chk_keep_chunks.config(text=t("preview.keep_chunks"))
+        self._lbl_fast_mode_hint.config(text=t("preview.fast_mode_hint"))
         if not self.plan:
             self._lbl_summary.config(text=t("preview.no_plan"))
 
@@ -145,6 +285,19 @@ class PreviewPage(ttk.Frame):
         return generate_preview(col_order, tmpl, pk_cols, uq, sv, count=5,
                                 marker_column=task.marker_column, marker_value=task.marker_value)
 
+    def _estimate(self):
+        if not self.plan:
+            messagebox.showinfo(t("common.info"), t("preview.est_no_plan"))
+            return
+        session = self._session or self.main_window.session
+        shared_db = session.db if session and session.is_connected else None
+        paths = AppPaths()
+        est = estimate_campaign(
+            self.plan, self.conn_config, self.scan_result,
+            output_dir=paths.output_dir, db=shared_db,
+        )
+        EstimationDialog(self, est)
+
     def _execute(self):
         if not self.plan:
             return
@@ -187,5 +340,10 @@ class PreviewPage(ttk.Frame):
 
         # ── Proceed to execution ──
         mw = self.main_window
-        mw.page_execute.start_execution(self.plan, self.conn_config, self.scan_result)
+        insert_mode = "load_data" if self._fast_mode_var.get() else "insert"
+        keep_chunks = self._keep_chunks_var.get()
+        mw.page_execute.start_execution(
+            self.plan, self.conn_config, self.scan_result,
+            insert_mode=insert_mode, keep_chunks=keep_chunks,
+        )
         mw.notebook.select(4)
